@@ -1,0 +1,9 @@
+gopher.floodgap.com
+70
+#ref
+sdf.org:70
+#struct
+1
+0/image.txt
+7/kek
+0/kek/lel.txt
