@@ -1,10 +1,10 @@
 use strict;
 use Class::Struct;
+use IO::Socket::INET;
 
 struct Host => {
 	name => '$',
 	port => '$',
-	visited => '$',
 	refs => '@',
 	endpoints => '@'
 };
@@ -48,10 +48,6 @@ sub host_to_filename{
 	return "$host#$port.txt";
 }
 
-sub try_add_empty_host{
-	my ($host, $port) = @_;
-}
-
 sub is_host_unvisited{
 	my ($hostname, $port) = @_;
 	return -z host_to_filename($hostname, $port);
@@ -78,13 +74,13 @@ sub write_host{
 
 sub traverse_host{
 	my ($hostname, $port) = @_;
-	print "traversing host!\n";
+	print "# $hostname:$port\n";
 
 	my $host=Host->new();
 	$host->name($hostname);
 	$host->port($port);
 
-	traverse_gopher_page($host);
+	traverse_gopher_page($host, ""); # recursively traverse all gopher pages of server, starting with the index page (empty path).
 	
 	return $host;
 }
@@ -93,15 +89,63 @@ sub traverse_gopher_page{
 	my($host, $path) = @_;
 
 	unless(defined $path){
-		$path = "";
+		$path = "/";
 	}
 
-	# make request recursively
+	$path =~ s/^\s+|\s+$//g; #trim the ends
+
+	if($path eq ""){
+		$path = "/";
+	}
+
+	sleep(1);
+	print "$path\n";
+
+	# request gopher page
+	my @rows = request_gopher($host->name, $host->port, $path);
+	
+	# iterate all endpoints
+	foreach my $row (@rows) {
+		# register unknown hosts
+		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^(.)([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
+		# map file endpoints
+
+		unless($rowtype == "i" || $rowtype == "3"){
+			if(($rowhost eq $host->name) && ($rowport == $host->port)){
+				# link is on the current host
+				# register endpoint
+				my $pathref = "$rowtype$rowpath";
+				unless( grep(/^$pathref$/, @{$host->endpoints})) {
+					push(@{$host->endpoints}, $pathref);
+					if($rowtype == "1"){					
+						traverse_gopher_page($host, $rowpath);
+					}
+				}
+			}
+			else
+			{
+				# link to another host
+				# register host if unknown
+				unless(is_host_registered($rowhost, $rowport)){
+					print "found another host: $rowhost $rowport\n";
+					register_unvisited_host($rowhost, $rowport);
+				}
+			}
+		}
+	}
 }
 
 sub request_gopher{
-	# request gopher page 
-	# map all endpoints
-	# register all other hosts
-	# recursively call request gopher on all other gopher pages
+	my($host, $port, $path) = @_;
+
+	my $socket = new IO::Socket::INET (
+    		PeerHost => $host,
+    		PeerPort => $port,
+    		Proto => 'tcp'
+	);
+
+	$socket->send("$path\n");
+	# my $content = join('',<$socket>);
+
+	return <$socket>;
 }
