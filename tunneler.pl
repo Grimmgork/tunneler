@@ -9,6 +9,13 @@ struct Host => {
 	endpoints => '@'
 };
 
+struct PathSegment => {
+	parent => '$',
+	children => '@',
+	type => '$',
+	dirty => '$'
+};
+
 while(1) {
 	my $filename;
 	$filename = &pick_unvisited_host;
@@ -17,9 +24,10 @@ while(1) {
 	}
 
 	my ($hostname, $port) = filename_to_host($filename);
-	print "# HOST: $hostname:$port\n";
-	write_host(traverse_host($hostname, $port), $filename);
-	print "HOST DONE!";
+	print "### START HOST: $hostname:$port ###\n";
+	my $host = traverse_host($hostname, $port);
+	write_host($host, $filename);
+	print "### HOST DONE! ###\n";
 }
 
 sub pick_unvisited_host{
@@ -46,6 +54,7 @@ sub filename_to_host{
 
 sub host_to_filename{
 	my ($host, $port) = @_;
+
 	return "$host#$port.txt";
 }
 
@@ -90,7 +99,7 @@ sub traverse_host{
 	$host->name($hostname);
 	$host->port($port);
 
-	traverse_gopher_page_recursively($host, "/"); # recursively traverse all gopher pages of server, starting with the index page (empty path).
+	traverse_gopher_page_recursively($host, "/", 5); # recursively traverse all gopher pages of server, starting with the index page (empty path).
 	
 	return $host;
 }
@@ -120,15 +129,22 @@ sub clean_path{
 }
 
 sub traverse_gopher_page_recursively{
-	my($host, $path) = @_;
+	my($host, $path, $depth) = @_;
 
 	$path = clean_path($path);
 
-	push(@{$host->endpoints}, "1$path");
-	print "+ GOPHER: 1$path\n";
-
 	# request gopher page
-	my @rows = request_gopher($host->name, $host->port, $path);
+	my @rows;
+	eval{
+		@rows = request_gopher($host->name, $host->port, $path);
+	};
+
+	if ($@) {
+    		return undef;
+	}
+
+	push(@{$host->endpoints}, "1$path");
+	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 	
 	# iterate all endpoints
 	foreach my $row (@rows) {
@@ -156,7 +172,9 @@ sub traverse_gopher_page_recursively{
 			my $pathref = "$rowtype$rowpath";
 			unless( grep(/^\Q$pathref\E$/, @{$host->endpoints}) ) {
 				if($rowtype eq "1"){
-					traverse_gopher_page_recursively($host, $rowpath);
+					if($depth > 0){
+						traverse_gopher_page_recursively($host, $rowpath, $depth-1);
+					}
 				}
 				else{
 					push(@{$host->endpoints}, $pathref);
@@ -171,7 +189,7 @@ sub traverse_gopher_page_recursively{
 			unless(is_host_registered($rowhost, $rowport)){
 				register_unvisited_host($rowhost, $rowport);
 				push(@{$host->refs}, "$rowhost:$rowport");
-				print "* found new host: $rowhost:$rowport\n";
+				print " * DICOVERED: $rowhost:$rowport\n";
 			}
 		}
 	}
@@ -183,9 +201,12 @@ sub request_gopher{
 	my $socket = new IO::Socket::INET (
     		PeerHost => $host,
     		PeerPort => $port,
-    		Proto => 'tcp'
+    		Proto => 'tcp',
+		Timeout => 5
 	);
 
 	$socket->send("$path\n");
-	return <$socket>;
+	my @result = <$socket>;
+	close($socket);
+	return @result;
 }
