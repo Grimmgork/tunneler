@@ -5,8 +5,8 @@ use IO::Socket::INET;
 struct Host => {
 	name => '$',
 	port => '$',
-	refs => '@',
-	endpoints => '@'
+	refs => '%',
+	endpoints => '%'
 };
 
 struct PathSegment => {
@@ -27,7 +27,6 @@ while(1) {
 	print "### START HOST: $hostname:$port ###\n";
 	my $host = traverse_host($hostname, $port);
 	write_host($host, $filename);
-	print "### HOST DONE! ###\n";
 }
 
 sub pick_unvisited_host{
@@ -54,7 +53,8 @@ sub filename_to_host{
 
 sub host_to_filename{
 	my ($host, $port) = @_;
-
+	$host =~ s/[^a-z\d\-.]//gi;
+	$port =~ m/\d+/;
 	return "$host#$port.txt";
 }
 
@@ -80,14 +80,16 @@ sub write_host{
 	printf $fh "%s\n", $host->name;
 	printf $fh "%s\n", $host->port;
 	print $fh "#REF\n";
-	if(@{$host->refs} > 0){
-		print $fh join("\n", @{$host->refs});
+	my @refs = keys %{$host->refs};
+	if(@refs > 0){
+		print $fh join("\n", @refs);
 		print $fh "\n";
 	}
 	print $fh "#STRUCT";
-	if(@{$host->endpoints} > 0){
+	my @endpts = keys %{$host->endpoints};
+	if(@endpts > 0){
 		print $fh "\n";
-		print $fh join("\n", @{$host->endpoints});
+		print $fh join("\n", @endpts);
 	}
 	close $fh;
 }
@@ -99,7 +101,7 @@ sub traverse_host{
 	$host->name($hostname);
 	$host->port($port);
 
-	traverse_gopher_page_recursively($host, "/", 5); # recursively traverse all gopher pages of server, starting with the index page (empty path).
+	traverse_gopher_page_recursively($host, "", 3); # recursively traverse all gopher pages of server, starting with the index page "/".
 	
 	return $host;
 }
@@ -118,11 +120,11 @@ sub rm_trailing_slash{
 
 sub clean_path{
 	my ($path) = @_;
-	unless(defined $path){
-		return "/";
-	}
 	$path = trim($path);
 	if($path eq "" || $path eq "/"){
+		return "/";
+	}
+	unless(defined $path){
 		return "/";
 	}
 	return rm_trailing_slash($path);
@@ -131,6 +133,12 @@ sub clean_path{
 sub traverse_gopher_page_recursively{
 	my($host, $path, $depth) = @_;
 
+	if($depth < 0 || $path =~ /(\/commit\/|archive|git)/gi){ # dont wander into deep, dark caverns ... 0~0
+		${$host->endpoints}{"1#SKIP#$path"} = 1;
+		printf " -> SKIP: %s:%s 1%s\n", $host->name, $host->port, $path;
+		return 0;
+	}
+
 	$path = clean_path($path);
 
 	# request gopher page
@@ -138,12 +146,14 @@ sub traverse_gopher_page_recursively{
 	eval{
 		@rows = request_gopher($host->name, $host->port, $path);
 	};
-
 	if ($@) {
-    		return undef;
+		print " X ERROR\n";
+		<STDIN>;
+		return 0;
 	}
 
-	push(@{$host->endpoints}, "1$path");
+	#push(@{$host->endpoints}, "1$path");
+	${$host->endpoints}{"1$path"} = 1;
 	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 	
 	# iterate all endpoints
@@ -166,47 +176,51 @@ sub traverse_gopher_page_recursively{
 			next;
 		}
 
-		if(($rowhost eq $host->name) && ($rowport eq $host->port)){
-			# link is on the current host
+		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link is on the current host
 			# register endpoint
 			my $pathref = "$rowtype$rowpath";
-			unless( grep(/^\Q$pathref\E$/, @{$host->endpoints}) ) {
+			unless(${$host->endpoints}{$pathref}) {
+				${$host->endpoints}{"$pathref"} = 1;
+				print "$pathref\n";
+
 				if($rowtype eq "1"){
-					if($depth > 0){
-						traverse_gopher_page_recursively($host, $rowpath, $depth-1);
-					}
-				}
-				else{
-					push(@{$host->endpoints}, $pathref);
-					print "$pathref\n";
+					traverse_gopher_page_recursively($host, $rowpath, $depth-1)
 				}
 			}
 		}
-		else
+		else # link to another host
 		{
-			# link to another host
 			# register host if unknown
 			unless(is_host_registered($rowhost, $rowport)){
+				${$host->refs}{"$rowhost:$rowport"} = 1;
 				register_unvisited_host($rowhost, $rowport);
-				push(@{$host->refs}, "$rowhost:$rowport");
 				print " * DICOVERED: $rowhost:$rowport\n";
 			}
 		}
 	}
+
+	return 1;
 }
 
 sub request_gopher{
-	my($host, $port, $path) = @_;
+	my($hostname, $port, $path) = @_;
 
 	my $socket = new IO::Socket::INET (
-    		PeerHost => $host,
+    		PeerHost => $hostname,
     		PeerPort => $port,
     		Proto => 'tcp',
-		Timeout => 5
+		Timeout => 10
 	);
 
 	$socket->send("$path\n");
-	my @result = <$socket>;
+	local $SIG{ALRM} = sub { die "timeout" };
+	my @result;
+	eval{
+		alarm 10;
+		@result = <$socket>;
+	};
 	close($socket);
+	alarm 0;
+
 	return @result;
 }
