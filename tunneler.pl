@@ -1,6 +1,7 @@
 use strict;
 use Class::Struct;
 use IO::Socket::INET;
+use IO::Select;
 
 struct Host => {
 	name => '$',
@@ -147,7 +148,7 @@ sub traverse_gopher_page_recursively{
 		@rows = request_gopher($host->name, $host->port, $path);
 	};
 	if ($@) {
-		print " X ERROR\n";
+		print " X ERROR: $@ \n";
 		<STDIN>;
 		return 0;
 	}
@@ -213,14 +214,16 @@ sub request_gopher{
 	);
 
 	$socket->send("$path\n");
-	local $SIG{ALRM} = sub { die "timeout" };
-	my @result;
-	eval{
-		alarm 10;
-		@result = <$socket>;
-	};
-	close($socket);
-	alarm 0;
+	
+	my $selector = new IO::Select();
+	$selector->add($socket);
 
-	return @result;
+	unless(defined $selector->can_read(5)){
+		close($socket);
+		die "TIMEOUT!";
+	}
+
+	my @result = <$socket>;
+	close($socket);
+	return @result; # split /\r\n/, $response;
 }
