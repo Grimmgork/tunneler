@@ -69,9 +69,15 @@ sub is_host_registered{
 	return -e host_to_filename($hostname, $port);
 }
 
-sub register_unvisited_host{
+sub register_host{
 	my ($hostname, $port) = @_;
+
+	return 0 if($hostname =~ /(^ftp\.|\.onion$)/gi); #exclude *.onion and ftp.* domains
+	return 0 if($hostname < 3);
+	return 0 if(is_host_registered($hostname, $port));
+
 	{ open my $handle, '>', host_to_filename($hostname, $port) }
+	return 1;
 }
 
 sub write_host{
@@ -81,10 +87,11 @@ sub write_host{
 	printf $fh "%s\n", $host->name;
 	printf $fh "%s\n", $host->port;
 	print $fh "#REF\n";
-	my @refs = keys %{$host->refs};
-	if(@refs > 0){
-		print $fh join("\n", @refs);
-		print $fh "\n";
+	my @references = keys %{$host->refs};
+	if(@references > 0){
+		while ( (my $k, my $v) = each %{$host->refs} ) {
+    			print $fh "$k => $v\n";
+		}
 	}
 	print $fh "#STRUCT";
 	my @endpts = keys %{$host->endpoints};
@@ -93,6 +100,16 @@ sub write_host{
 		print $fh join("\n", @endpts);
 	}
 	close $fh;
+}
+
+sub increment_hash{
+	my ($hash, $key) = @_;
+	unless($hash->{$key}){
+		$hash->{$key} = 1;
+	}
+	else{
+		$hash->{$key} += 1;
+	}
 }
 
 sub traverse_host{
@@ -142,20 +159,18 @@ sub traverse_gopher_page_recursively{
 
 	$path = clean_path($path);
 
-	# request gopher page
+	${$host->endpoints}{"1$path"} = 1;
+	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
+
+	# try request gopher page
 	my @rows;
 	eval{
 		@rows = request_gopher($host->name, $host->port, $path);
 	};
 	if ($@) {
-		print " X ERROR: $@ \n";
-		<STDIN>;
+		print " X ERROR: $@ \n"; #quit if an error occured
 		return 0;
 	}
-
-	#push(@{$host->endpoints}, "1$path");
-	${$host->endpoints}{"1$path"} = 1;
-	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 	
 	# iterate all endpoints
 	foreach my $row (@rows) {
@@ -165,7 +180,7 @@ sub traverse_gopher_page_recursively{
 		$rowhost = trim($rowhost);
 		$rowport = trim($rowport);
 
-		if($rowtype eq "i" || $rowtype eq "3" || $rowtype eq ""){
+		if($rowtype =~ /^[i3]$/){
 			next;
 		}
 
@@ -191,11 +206,14 @@ sub traverse_gopher_page_recursively{
 		}
 		else # link to another host
 		{
-			# register host if unknown
-			unless(is_host_registered($rowhost, $rowport)){
-				${$host->refs}{"$rowhost:$rowport"} = 1;
-				register_unvisited_host($rowhost, $rowport);
-				print " * DICOVERED: $rowhost:$rowport\n";
+			unless($rowtype =~ /^[8T+2]$/){
+				# try register host
+				increment_hash(\%{$host->refs}, "$rowhost:$rowport");
+				print " ~ REF: $rowhost:$rowport\n";
+
+				if(register_host($rowhost, $rowport)){
+					print " * DICOVERED: $rowhost:$rowport\n";
+				}
 			}
 		}
 	}
@@ -218,7 +236,7 @@ sub request_gopher{
 	my $selector = new IO::Select();
 	$selector->add($socket);
 
-	unless(defined $selector->can_read(5)){
+	unless(defined $selector->can_read(7)){
 		close($socket);
 		die "TIMEOUT!";
 	}
