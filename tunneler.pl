@@ -4,9 +4,7 @@ use IO::Socket::INET;
 use IO::Select;
 use Net::Ping;
 
-my $PING = "8.8.8.8";
-
-print has_internet_connection();
+require './data.pl';
 
 struct Host => {
 	name => '$',
@@ -15,12 +13,10 @@ struct Host => {
 	endpoints => '%'
 };
 
-struct PathSegment => {
-	parent => '$',
-	children => '@',
-	type => '$',
-	dirty => '$'
-};
+my $PING = "8.8.8.8";
+# my $DBH = data_connect("gopherspace.db");
+
+exit();
 
 while(1) {
 	my $filename;
@@ -35,6 +31,7 @@ while(1) {
 	write_host($host, $filename);
 }
 
+
 sub pick_unvisited_host{
 	my $dirname = '.';
 	opendir(DIR, $dirname) or die "Could not open $dirname\n";
@@ -48,6 +45,7 @@ sub pick_unvisited_host{
 			last;
 		}
 	}
+
 	closedir(DIR);
 	return $result;
 }
@@ -155,7 +153,7 @@ sub clean_path{
 sub has_internet_connection{
 	my $p = Net::Ping->new('tcp');
 	$p->port_number(443);
-	my $res = $p->ping('8.8.8.8');
+	my $res = $p->ping($PING);
 	$p->close();
 	return $res;
 }
@@ -195,11 +193,11 @@ sub traverse_gopher_page_recursively{
 	foreach my $row (@rows) {
 		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^(.)([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
 
-		if($rowtype =~ /^[i3]$/){
+		if($rowtype =~ /^[i3]$/){ # rowtype i and 3 are ignored
 			next;
 		}
 
-		if($rowhost =~ m/[^\da-z-.ßàÁâãóôþüúðæåïçèõöÿýòäœêëìíøùîûñé]/i){ # check for invalid characters
+		if($rowhost =~ m/[^\da-z-.ßàÁâãóôþüúðæåïçèõöÿýòäœêëìíøùîûñé]/i){ # check for invalid characters in hostname
 			next;
 		}
 
