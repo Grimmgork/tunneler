@@ -2,6 +2,11 @@ use strict;
 use Class::Struct;
 use IO::Socket::INET;
 use IO::Select;
+use Net::Ping;
+
+my $PING = "8.8.8.8";
+
+print has_internet_connection();
 
 struct Host => {
 	name => '$',
@@ -38,7 +43,7 @@ sub pick_unvisited_host{
 	my $filename;
 	while ($filename = readdir(DIR)) {
   		next unless -f $filename;
-		if(&is_host_unvisited(filename_to_host($filename))){
+		unless(&is_host_visited(filename_to_host($filename))){
 			$result = $filename;
 			last;
 		}
@@ -59,9 +64,9 @@ sub host_to_filename{
 	return "$host#$port.txt";
 }
 
-sub is_host_unvisited{
+sub is_host_visited{
 	my ($hostname, $port) = @_;
-	return -z host_to_filename($hostname, $port);
+	return ! -z host_to_filename($hostname, $port);
 }
 
 sub is_host_registered{
@@ -73,7 +78,6 @@ sub register_host{
 	my ($hostname, $port) = @_;
 
 	return 0 if($hostname =~ /(^ftp\.|\.onion$)/gi); #exclude *.onion and ftp.* domains
-	return 0 if($hostname < 3);
 	return 0 if(is_host_registered($hostname, $port));
 
 	{ open my $handle, '>', host_to_filename($hostname, $port) }
@@ -90,7 +94,7 @@ sub write_host{
 	my @references = keys %{$host->refs};
 	if(@references > 0){
 		while ( (my $k, my $v) = each %{$host->refs} ) {
-    			print $fh "$k => $v\n";
+    			print $fh "$k $v\n";
 		}
 	}
 	print $fh "#STRUCT";
@@ -148,19 +152,31 @@ sub clean_path{
 	return rm_trailing_slash($path);
 }
 
+sub has_internet_connection{
+	my $p = Net::Ping->new('tcp');
+	$p->port_number(443);
+	my $res = $p->ping('8.8.8.8');
+	$p->close();
+	return $res;
+}
+
+sub wait_for_internet_connection{
+	sleep(3);
+	until(has_internet_connection()){
+		sleep(3);
+	}
+}
+
 sub traverse_gopher_page_recursively{
 	my($host, $path, $depth) = @_;
 
 	if($depth < 0 || $path =~ /(\/commit\/|archive|git)/gi){ # dont wander into deep, dark caverns ... 0~0
 		${$host->endpoints}{"1#SKIP#$path"} = 1;
 		printf " -> SKIP: %s:%s 1%s\n", $host->name, $host->port, $path;
-		return 0;
+		return 1; # self restriction error
 	}
 
 	$path = clean_path($path);
-
-	${$host->endpoints}{"1$path"} = 1;
-	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 
 	# try request gopher page
 	my @rows;
@@ -168,29 +184,35 @@ sub traverse_gopher_page_recursively{
 		@rows = request_gopher($host->name, $host->port, $path);
 	};
 	if ($@) {
-		print " X ERROR: $@ \n"; #quit if an error occured
-		return 0;
+		print " X ERROR: $@ \n"; # quit if an error occured
+		return 2; # external error
 	}
-	
+
+	${$host->endpoints}{"1$path"} = 1;
+	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
+
 	# iterate all endpoints
 	foreach my $row (@rows) {
-		# register unknown hosts
 		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^(.)([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
-		$rowpath = clean_path($rowpath);
-		$rowhost = trim($rowhost);
-		$rowport = trim($rowport);
 
 		if($rowtype =~ /^[i3]$/){
 			next;
 		}
 
-		unless((defined $rowhost) && (defined $rowport)){
+		if($rowhost =~ m/[^\da-z-.ßàÁâãóôþüúðæåïçèõöÿýòäœêëìíøùîûñé]/i){ # check for invalid characters
 			next;
 		}
 
-		if(($rowhost eq "") && ($rowport eq "")){
-			next;
+		if(not defined $rowhost){
+			$rowhost = $host->name;
 		}
+
+		if(not defined $rowport){
+			$rowport = $host->port;
+		}
+
+		$rowpath = clean_path($rowpath);
+		$rowhost = trim(lc $rowhost); #lowercase the domain name
 
 		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link is on the current host
 			# register endpoint
@@ -230,6 +252,10 @@ sub request_gopher{
     		Proto => 'tcp',
 		Timeout => 10
 	);
+
+	unless(defined $socket){
+		die "CONNECTION";
+	}
 
 	$socket->send("$path\n");
 	
