@@ -2,7 +2,7 @@ use DBI;
 
 sub data_connect{
 	my($path) = @_;
-	if($path =~ m/[' "]/i){
+	if($path =~ m/[' ""]/i){
 		die "invalid database path!"
 	}
 	my $db = DBI->connect("dbi:SQLite:dbname=$path","","") or die('database error: ' . DBI->errstr());
