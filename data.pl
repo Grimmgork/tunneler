@@ -1,6 +1,7 @@
 use DBI;
 
 my %HOST_IDS;
+my %ENDPOINT_CACHE;
 
 sub data_connect{
 	my($path) = @_;
@@ -72,8 +73,6 @@ sub data_set_host_status{
 
 # ### ENDPOINTS:
 
-my %endpoint_cache;
-
 sub data_add_endpoint{
 	my($db, $host, $port, $type, $path, $status) = @_;
 	my $sth = $db->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
@@ -103,31 +102,14 @@ sub data_is_endpoint_registered{
 	return 0;
 }
 
-sub data_clear_endpoint_cache{
-	%{$endpoint_cache} = ();
-}
-
-sub data_load_endpoint_cache{
-	my ($db, $host, $port) = @_;
-	my $sth = $db->prepare("select * from endpoints where hostid=? and path=?");
-	$sth->execute("$host:$port", $path);
-	while(($lname,$fname,$ext) = $sth->fetchrow()){
-   		print("$lname, $fname\t$ext\n");                   
-	}
-}
-
-sub data_check_endpoint_cache{
-	my ($host, $port, $path) = @_;
-	return defined $endpoint_cache{"$host:$port#$path"};
-}
-
 # ### REFERENCES: 
 
 sub data_refs_get_count{
 	my($db, $from_host, $from_port, $to_host, $to_port) = @_;
 	my $sth = $db->prepare("select * from refs where pair=? LIMIT 1");
 	$sth->execute("$from_host:$from_port=>$to_host:$to_port");
-	unless(defined $sth->fetchrow_array){
+	my(undef, $count) = $sth->fetchrow_array;
+	unless(defined $count){
 		return 0;
 	}
 	return $count;

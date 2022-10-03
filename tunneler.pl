@@ -31,11 +31,6 @@ unless(data_get_first_host_unvisited($DBH)){
 	data_register_new_host($DBH, $host, $port);
 }
 
-# data_register_new_host($DBH, "gopher.floodgap.com", 70);
-# print data_is_endpoint_registered($DBH, "gopher.floodgap.com", 70, "/");
-
-#data_increment_reference($DBH, "gopher.floodgap.com", 70, "bobbynet.strangled.net", 70);
-
 while(1) {
 	my $host = data_get_first_host_unvisited($DBH);
 	unless(defined $host){
