@@ -96,8 +96,8 @@ sub data_get_endpoints_where_status{
 sub data_is_endpoint_registered{
 	my($db, $host, $port, $path) = @_;
 	my $sth = $db->prepare("select * from endpoints where hostid=? and path=? LIMIT 1");
-	$sth->execute(data_get_host_id("$host:$port"), $path);
-	if($sth->fetchrow_array){
+	$sth->execute(data_get_host_id($host, $port), $path);
+	if(defined $sth->fetchrow_array){
 		return 1;
 	}
 	return 0;
@@ -127,8 +127,7 @@ sub data_refs_get_count{
 	my($db, $from_host, $from_port, $to_host, $to_port) = @_;
 	my $sth = $db->prepare("select * from refs where pair=? LIMIT 1");
 	$sth->execute("$from_host:$from_port=>$to_host:$to_port");
-	my ($hosts, $count) = $sth->fetchrow_array;
-	unless(defined $hosts){
+	unless(defined $sth->fetchrow_array){
 		return 0;
 	}
 	return $count;

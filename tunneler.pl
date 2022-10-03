@@ -18,6 +18,11 @@ print "INDEXING ...\n";
 my $DBH = data_connect("gopherspace.db");
 print "DONE!\n";
 
+#data_register_new_host($DBH, "gopher.floodgap.com", 70);
+#data_add_endpoint($DBH, "gopher.floodgap.com", 70, "I", "/kek/lel", 0);
+#print data_is_endpoint_registered($DBH, "gopher.floodgap.com", 70, "/kek/les");
+
+#exit();
 
 unless(data_get_first_host_unvisited($DBH)){
 	print "Host?:\n";
@@ -53,7 +58,7 @@ sub register_host{
 	return 0 if($port eq "");
 	return 0 if($hostname =~ /(^ftp\.|\.onion$)/gi); #exclude *.onion and ftp.* domains
 	return 0 if(data_is_host_registered($hostname, $port));
-	
+
 	data_register_new_host($DBH, $hostname, $port);
 	return 1;
 }
