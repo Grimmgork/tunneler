@@ -14,94 +14,48 @@ struct Host => {
 };
 
 my $PING = "8.8.8.8";
-# my $DBH = data_connect("gopherspace.db");
+print "INDEXING ...\n";
+my $DBH = data_connect("gopherspace.db");
+print "DONE!\n";
 
-exit();
+
+unless(data_get_first_host_unvisited($DBH)){
+	print "Host?:\n";
+	my $inpt = defined $ARGV[0] ? $ARGV[0] : <STDIN>;
+	my ($host, $port) = host_split($inpt);
+	data_register_new_host($DBH, $host, $port);
+}
+
+# data_register_new_host($DBH, "gopher.floodgap.com", 70);
+# print data_is_endpoint_registered($DBH, "gopher.floodgap.com", 70, "/");
+
+#data_increment_reference($DBH, "gopher.floodgap.com", 70, "bobbynet.strangled.net", 70);
 
 while(1) {
-	my $filename;
-	$filename = &pick_unvisited_host;
-	unless(defined $filename){
+	my $host = data_get_first_host_unvisited($DBH);
+	unless(defined $host){
 		last;
 	}
-
-	my ($hostname, $port) = filename_to_host($filename);
+	my ($hostname, $port) = host_split($host);
 	print "### START HOST: $hostname:$port ###\n";
-	my $host = traverse_host($hostname, $port);
-	write_host($host, $filename);
+	traverse_host($hostname, $port);
 }
 
-
-sub pick_unvisited_host{
-	my $dirname = '.';
-	opendir(DIR, $dirname) or die "Could not open $dirname\n";
-
-	my $result;
-	my $filename;
-	while ($filename = readdir(DIR)) {
-  		next unless -f $filename;
-		unless(&is_host_visited(filename_to_host($filename))){
-			$result = $filename;
-			last;
-		}
-	}
-
-	closedir(DIR);
-	return $result;
-}
-
-sub filename_to_host{
-	my $filename = shift @_;
-	return ($filename =~ m/(^[a-zA-Z0-9-\.]+)#(\d+)/);
-}
-
-sub host_to_filename{
-	my ($host, $port) = @_;
-	$host =~ s/[^a-z\d\-.]//gi;
-	$port =~ m/\d+/;
-	return "$host#$port.txt";
-}
-
-sub is_host_visited{
-	my ($hostname, $port) = @_;
-	return ! -z host_to_filename($hostname, $port);
-}
-
-sub is_host_registered{
-	my ($hostname, $port) = @_;
-	return -e host_to_filename($hostname, $port);
+sub host_split{
+	my $str = shift @_;
+	return ($str =~ m/(^[a-zA-Z0-9-\.]+):(\d+)/);
 }
 
 sub register_host{
 	my ($hostname, $port) = @_;
 
+	return 0 if($hostname eq "");
+	return 0 if($port eq "");
 	return 0 if($hostname =~ /(^ftp\.|\.onion$)/gi); #exclude *.onion and ftp.* domains
-	return 0 if(is_host_registered($hostname, $port));
-
-	{ open my $handle, '>', host_to_filename($hostname, $port) }
+	return 0 if(data_is_host_registered($hostname, $port));
+	
+	data_register_new_host($DBH, $hostname, $port);
 	return 1;
-}
-
-sub write_host{
-	my ($host, $filename) = @_;
-
-	open(my $fh, '>', $filename) or die "Could not open file '$filename' $!";
-	printf $fh "%s\n", $host->name;
-	printf $fh "%s\n", $host->port;
-	print $fh "#REF\n";
-	my @references = keys %{$host->refs};
-	if(@references > 0){
-		while ( (my $k, my $v) = each %{$host->refs} ) {
-    			print $fh "$k $v\n";
-		}
-	}
-	print $fh "#STRUCT";
-	my @endpts = keys %{$host->endpoints};
-	if(@endpts > 0){
-		print $fh "\n";
-		print $fh join("\n", @endpts);
-	}
-	close $fh;
 }
 
 sub increment_hash{
@@ -122,7 +76,8 @@ sub traverse_host{
 	$host->port($port);
 
 	traverse_gopher_page_recursively($host, "", 3); # recursively traverse all gopher pages of server, starting with the index page "/".
-	
+	data_set_host_status($DBH, $hostname, $port, 1);
+	data_commit($DBH);
 	return $host;
 }
 
@@ -166,10 +121,11 @@ sub wait_for_internet_connection{
 }
 
 sub traverse_gopher_page_recursively{
-	my($host, $path, $depth) = @_;
+	my($host, $path, $depth, %cache) = @_;
 
 	if($depth < 0 || $path =~ /(\/commit\/|archive|git)/gi){ # dont wander into deep, dark caverns ... 0~0
-		${$host->endpoints}{"1#SKIP#$path"} = 1;
+		#${$host->endpoints}{"1#SKIP#$path"} = 1;
+		# data_add_endpoint($DBH, $host->name, $host->port, 1, $path, 2);
 		printf " -> SKIP: %s:%s 1%s\n", $host->name, $host->port, $path;
 		return 1; # self restriction error
 	}
@@ -187,6 +143,7 @@ sub traverse_gopher_page_recursively{
 	}
 
 	${$host->endpoints}{"1$path"} = 1;
+	data_add_endpoint($DBH, $host->name, $host->port, 1, $path, 1);
 	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 
 	# iterate all endpoints
@@ -201,22 +158,22 @@ sub traverse_gopher_page_recursively{
 			next;
 		}
 
-		if(not defined $rowhost){
-			$rowhost = $host->name;
-		}
-
-		if(not defined $rowport){
-			$rowport = $host->port;
-		}
-
 		$rowpath = clean_path($rowpath);
-		$rowhost = trim(lc $rowhost); #lowercase the domain name
+		$rowhost = trim(lc $rowhost); #lowercase and trim the domain name
+
+		if(($rowhost eq "") or not defined $rowhost ){
+			next;
+		}
+
+		if(($rowport eq "") or not defined $rowport){
+			next;
+		}
 
 		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link is on the current host
 			# register endpoint
 			my $pathref = "$rowtype$rowpath";
-			unless(${$host->endpoints}{$pathref}) {
-				${$host->endpoints}{"$pathref"} = 1;
+			unless(data_is_endpoint_registered($DBH, $rowhost, $rowport, $rowpath)) {
+				data_add_endpoint($DBH, $rowhost, $rowport, $rowtype, $rowpath, 1);
 				print "$pathref\n";
 
 				if($rowtype eq "1"){
@@ -227,17 +184,16 @@ sub traverse_gopher_page_recursively{
 		else # link to another host
 		{
 			unless($rowtype =~ /^[8T+2]$/){
-				# try register host
-				increment_hash(\%{$host->refs}, "$rowhost:$rowport");
-				print " ~ REF: $rowhost:$rowport\n";
-
 				if(register_host($rowhost, $rowport)){
 					print " * DICOVERED: $rowhost:$rowport\n";
 				}
+				data_increment_reference($DBH, $host->name, $host->port, $rowhost, $rowport);
+				print " ~ REF: $rowhost:$rowport\n";
 			}
 		}
 	}
 
+	# data_commit($DBH);
 	return 1;
 }
 

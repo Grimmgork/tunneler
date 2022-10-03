@@ -1,2 +1,2 @@
 @echo off
-perl %~dp0tunneler.pl
+perl %~dp0tunneler.pl %*
