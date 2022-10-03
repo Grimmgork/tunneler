@@ -102,6 +102,10 @@ sub clean_path{
 	unless(defined $path){
 		return "/";
 	}
+	unless($path =~ /^\//){
+		$path = "/$path";
+	}
+	$path =~ s/\\/\//g;
 	return rm_trailing_slash($path);
 }
 

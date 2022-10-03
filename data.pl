@@ -116,7 +116,6 @@ sub data_refs_get_count{
 }
 
 sub data_increment_reference{
-
 	my($db, $from_host, $from_port, $to_host, $to_port) = @_;
 	my $count = data_refs_get_count($db, $from_host, $from_port, $to_host, $to_port);
 	unless($count){
