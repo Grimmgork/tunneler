@@ -1,7 +1,8 @@
 use DBI;
 
 my %HOST_IDS;
-my %ENDPOINT_CACHE;
+my %ENDPOINT_CACHE_ID;
+my %ENDPOINT_CACHE_STATUS;
 
 sub data_connect{
 	my($path) = @_;
@@ -59,7 +60,7 @@ sub data_is_host_registered{
 
 sub data_get_first_host_unvisited{
 	my($db) = @_;
-	my $sth = $db->prepare("select (host) from hosts where status=0 LIMIT 1");
+	my $sth = $db->prepare("select id, host from hosts where status=0 LIMIT 1");
 	$sth->execute;
 	return $sth->fetchrow_array;
 }
@@ -73,14 +74,35 @@ sub data_set_host_status{
 
 # ### ENDPOINTS:
 
-sub data_add_endpoint{
+sub data_load_endpoint_cache_for_host{
+	my($db, $host, $port) = @_;
+	%ENDPOINT_CACHE_ID = ();
+	%ENDPOINT_CACHE_STATUS = ();
+	return unless(defined $db && defined $host && defined $port);
+	my $sth = $db->prepare("select id, path, status from endpoints where hostid=?");
+	$sth->execute(data_get_host_id($host, $port));
+	while(my ($id, $path, $status) = $sth->fetchrow_array){
+		$ENDPOINT_CACHE_ID{$path} = $id;
+		$ENDPOINT_CACHE_STATUS{$id} = $status;
+	}
+}
+
+sub data_try_add_endpoint{
 	my($db, $host, $port, $type, $path, $status) = @_;
+	if(my $id = $ENDPOINT_CACHE_ID{$path}){
+		return $id;
+	}
 	my $sth = $db->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
 	$sth->execute(data_get_host_id($host, $port), $type, $path, $status);
+	my $id = $db.sqlite_last_insert_rowid;
+	$ENDPOINT_CACHE_ID{$path} = $id;
+	$ENDPOINT_CACHE_STATUS{$id} = $status;
+	return $id;
 }
 
 sub data_set_endpoint_status{
 	my($db, $id, $status) = @_;
+	$ENDPOINT_CACHE_ID{$path} = $status;
 	my $sth = $db->prepare("update endpoints set status=? where id=?");
 	$sth->execute($status, $id);
 }
@@ -92,17 +114,24 @@ sub data_get_endpoints_where_status{
 	return $sth->fetchrow_array;
 }
 
-sub data_is_endpoint_registered{
-	my($db, $host, $port, $path) = @_;
-	my $sth = $db->prepare("select * from endpoints where hostid=? and path=? LIMIT 1");
-	$sth->execute(data_get_host_id($host, $port), $path);
-	if(defined $sth->fetchrow_array){
-		return 1;
-	}
-	return 0;
+sub data_set_endpoint_status{
+	my($id, $status) = @_;
+	$ENDPOINT_CACHE_STATUS{$id} = $status;
 }
 
-# ### REFERENCES: 
+sub data_get_endpoint_status{
+	my($id) = @_;
+	return $ENDPOINT_CACHE_STATUS{$id};
+}
+
+sub data_get_endpoint_id{
+	my($path) = @_;
+	return $ENDPOINT_CACHE_ID{$path};
+}
+
+
+
+# ### REFERENCES:
 
 sub data_refs_get_count{
 	my($db, $from_host, $from_port, $to_host, $to_port) = @_;
@@ -122,7 +151,6 @@ sub data_increment_reference{
 		$db->do("insert into refs (pair, count) values (?, ?)", undef, "$from_host:$from_port=>$to_host:$to_port", 1); # insert new row
 		return;
 	}
-
 	$db->do("update refs set count=? where pair=?", undef, $count+1, "$from_host:$from_port=>$to_host:$to_port");
 }
 

@@ -22,7 +22,10 @@ print "DONE!\n";
 #data_add_endpoint($DBH, "gopher.floodgap.com", 70, "I", "/kek/lel", 0);
 #print data_is_endpoint_registered($DBH, "gopher.floodgap.com", 70, "/kek/les");
 
-#exit();
+# data_load_endpoint_cache_for_host($DBH, "sdf.org", 70);
+# print data_try_add_endpoint($DBH, "sdf.org", 70, "I" , "/ma", 1);
+
+# exit();
 
 unless(data_get_first_host_unvisited($DBH)){
 	print "Host?:\n";
@@ -31,15 +34,14 @@ unless(data_get_first_host_unvisited($DBH)){
 	data_register_new_host($DBH, $host, $port);
 }
 
-while(1) {
-	my $host = data_get_first_host_unvisited($DBH);
-	unless(defined $host){
-		last;
-	}
+# main loop
+while(my ($id, $host) = data_get_first_host_unvisited($DBH)) {
 	my ($hostname, $port) = host_split($host);
 	print "### START HOST: $hostname:$port ###\n";
 	traverse_host($hostname, $port);
 }
+
+
 
 sub host_split{
 	my $str = shift @_;
@@ -75,9 +77,10 @@ sub traverse_host{
 	$host->name($hostname);
 	$host->port($port);
 
+	data_load_endpoint_cache_for_host($DBH, $host, $port);
 	traverse_gopher_page_recursively($host, "", 3); # recursively traverse all gopher pages of server, starting with the index page "/".
 	data_set_host_status($DBH, $hostname, $port, 1);
-	data_commit($DBH);
+	data_load_endpoint_cache_for_host();
 	return $host;
 }
 
@@ -125,7 +128,7 @@ sub wait_for_internet_connection{
 }
 
 sub traverse_gopher_page_recursively{
-	my($host, $path, $depth, %cache) = @_;
+	my($host, $path, $depth) = @_;
 
 	if($depth < 0 || $path =~ /(\/commit\/|archive|git)/gi){ # dont wander into deep, dark caverns ... 0~0
 		#${$host->endpoints}{"1#SKIP#$path"} = 1;
@@ -136,6 +139,8 @@ sub traverse_gopher_page_recursively{
 
 	$path = clean_path($path);
 
+	# get the id of the endpoint
+	my $endpoint_id = data_try_add_endpoint($DBH, $host->name, $host->port, 1, $path, 0);
 	# try request gopher page
 	my @rows;
 	eval{
@@ -143,11 +148,11 @@ sub traverse_gopher_page_recursively{
 	};
 	if ($@) {
 		print " X ERROR: $@ \n"; # quit if an error occured
+		data_set_endpoint_status($DBH, $endpoint_id, 3);
 		return 2; # external error
 	}
 
-	${$host->endpoints}{"1$path"} = 1;
-	data_add_endpoint($DBH, $host->name, $host->port, 1, $path, 1);
+	data_set_endpoint_status($DBH, $endpoint_id, 1);
 	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 
 	# iterate all endpoints
@@ -176,12 +181,12 @@ sub traverse_gopher_page_recursively{
 		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link is on the current host
 			# register endpoint
 			my $pathref = "$rowtype$rowpath";
-			unless(data_is_endpoint_registered($DBH, $rowhost, $rowport, $rowpath)) {
-				data_add_endpoint($DBH, $rowhost, $rowport, $rowtype, $rowpath, 1);
+			unless(data_get_endpoint_id($rowpath)) {
 				print "$pathref\n";
-
 				if($rowtype eq "1"){
 					traverse_gopher_page_recursively($host, $rowpath, $depth-1)
+				}else{
+					data_try_add_endpoint($DBH, $rowhost, $rowport, $rowtype, $rowpath, 0);
 				}
 			}
 		}
