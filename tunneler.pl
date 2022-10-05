@@ -25,49 +25,46 @@ print "DONE!\n";
 # data_load_endpoint_cache_for_host($DBH, "sdf.org", 70);
 # print data_try_add_endpoint($DBH, "sdf.org", 70, "I" , "/ma", 1);
 
-# exit();
+# print prompt("input?"), "\n";
 
+#my($host, $port) = split_host_port(prompt("host:port?"));
+#print "$host\n$port\n";
+#my $rowpath = "uri:http://google.com";
+#if(my ($url) = $rowpath =~ m/^UR[LI]:(.*)/gi){
+#	print $url, "\n";
+#}
+
+#exit();
+
+# prompt user for a host if no unvisited host is known
 unless(data_get_first_host_unvisited($DBH)){
-	print "Host?:\n";
-	my $inpt = defined $ARGV[0] ? $ARGV[0] : <STDIN>;
-	my ($host, $port) = host_split($inpt);
+	my $inpt = defined $ARGV[0] ? $ARGV[0] : prompt("host:port?");
+	my ($host, $port) = split_host_port($inpt);
 	data_register_new_host($DBH, $host, $port);
 }
 
 # main loop
 while(my ($id, $host) = data_get_first_host_unvisited($DBH)) {
-	my ($hostname, $port) = host_split($host);
+	my ($hostname, $port) = split_host_port($host);
 	print "### START HOST: $hostname:$port ###\n";
 	traverse_host($hostname, $port);
 }
 
-
-
-sub host_split{
+sub split_host_port{
 	my $str = shift @_;
-	return ($str =~ m/(^[a-zA-Z0-9-\.]+):(\d+)/);
+	my ($host, $port) = $str =~ m/(^[a-z0-9-\.]+):?(\d+)?/gi;
+	return ($host, 70) unless(defined $port);
+	return ($host, $port);
 }
 
-sub register_host{
+sub try_register_host{
 	my ($hostname, $port) = @_;
 
-	return 0 if($hostname eq "");
-	return 0 if($port eq "");
-	return 0 if($hostname =~ /(^ftp\.|\.onion$)/gi); #exclude *.onion and ftp.* domains
-	return 0 if(data_is_host_registered($hostname, $port));
-
-	data_register_new_host($DBH, $hostname, $port);
-	return 1;
-}
-
-sub increment_hash{
-	my ($hash, $key) = @_;
-	unless($hash->{$key}){
-		$hash->{$key} = 1;
-	}
-	else{
-		$hash->{$key} += 1;
-	}
+	return undef if($hostname eq "");
+	return undef if($port eq "");
+	return undef if(data_is_host_registered($hostname, $port));
+	
+	return data_register_new_host($DBH, $hostname, $port);
 }
 
 sub traverse_host{
@@ -77,11 +74,25 @@ sub traverse_host{
 	$host->name($hostname);
 	$host->port($port);
 
-	data_load_endpoint_cache_for_host($DBH, $host, $port);
-	traverse_gopher_page_recursively($host, "", 3); # recursively traverse all gopher pages of server, starting with the index page "/".
-	data_set_host_status($DBH, $hostname, $port, 1);
-	data_load_endpoint_cache_for_host();
+	data_load_endpoint_cache_for_host($DBH, $host, $port); # prepare database for host
+
+	my $err = traverse_gopher_page_recursively($host, "", 3); # recursively traverse gopher menus of host, starting with the index page "/".
+	if(defined $err){
+		data_set_host_status($DBH, $hostname, $port, 1); # traversed
+	}else{
+		data_set_host_status($DBH, $hostname, $port, $err+1); # error occured
+	}
+	
+	data_load_endpoint_cache_for_host(); # unload endpoint-cache
 	return $host;
+}
+
+sub prompt{
+	my($message) = @_;
+	print "$message\n";
+	my $res = <STDIN>;
+	chomp $res;
+	return $res;
 }
 
 sub trim{
@@ -130,9 +141,8 @@ sub wait_for_internet_connection{
 sub traverse_gopher_page_recursively{
 	my($host, $path, $depth) = @_;
 
-	if($depth < 0 || $path =~ /(\/commit\/|archive|git)/gi){ # dont wander into deep, dark caverns ... 0~0
-		#${$host->endpoints}{"1#SKIP#$path"} = 1;
-		# data_add_endpoint($DBH, $host->name, $host->port, 1, $path, 2);
+	# dont wander into deep, dark caverns ... o~o
+	if($depth < 0 || $path =~ /(\/commit\/|archive|.git)/gi){ 
 		printf " -> SKIP: %s:%s 1%s\n", $host->name, $host->port, $path;
 		return 1; # self restriction error
 	}
@@ -141,13 +151,14 @@ sub traverse_gopher_page_recursively{
 
 	# get the id of the endpoint
 	my $endpoint_id = data_try_add_endpoint($DBH, $host->name, $host->port, 1, $path, 0);
+
 	# try request gopher page
 	my @rows;
 	eval{
 		@rows = request_gopher($host->name, $host->port, $path);
 	};
 	if ($@) {
-		print " X ERROR: $@ \n"; # quit if an error occured
+		print " X ERROR: $@ \n";
 		data_set_endpoint_status($DBH, $endpoint_id, 3);
 		return 2; # external error
 	}
@@ -163,14 +174,16 @@ sub traverse_gopher_page_recursively{
 			next;
 		}
 
-		if($rowhost =~ m/[^\da-z-.ßàÁâãóôþüúðæåïçèõöÿýòäœêëìíøùîûñé]/i){ # check for invalid characters in hostname
-			next;
+		if(my ($url) = $rowpath =~ m/^UR[LI]:(.*)/gi){ # extract a full url reference like: URL:http://example.com
+			$rowpath = $url;
+			$rowtype = "U";
+		}else{
+			$rowpath = clean_path($rowpath);
 		}
 
-		$rowpath = clean_path($rowpath);
-		$rowhost = trim(lc $rowhost); #lowercase and trim the domain name
+		$rowhost = trim(lc $rowhost); # lowercase and trim the domain name
 
-		if(($rowhost eq "") or not defined $rowhost ){
+		if(($rowhost eq "") or not defined $rowhost){
 			next;
 		}
 
@@ -178,7 +191,7 @@ sub traverse_gopher_page_recursively{
 			next;
 		}
 
-		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link is on the current host
+		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link to current host
 			# register endpoint
 			my $pathref = "$rowtype$rowpath";
 			unless(data_get_endpoint_id($rowpath)) {
@@ -190,10 +203,16 @@ sub traverse_gopher_page_recursively{
 				}
 			}
 		}
-		else # link to another host
+		else # link to foreign host
 		{
 			unless($rowtype =~ /^[8T+2]$/){
-				if(register_host($rowhost, $rowport)){
+				# exclude *.onion and ftp.* domains
+				if($rowhost =~ /(^ftp\.|\.onion$)/gi){
+					next;
+				}
+
+				# make sure host is registered
+				if(defined try_register_host($rowhost, $rowport)){ 
 					print " * DICOVERED: $rowhost:$rowport\n";
 				}
 				data_increment_reference($DBH, $host->name, $host->port, $rowhost, $rowport);
@@ -201,9 +220,6 @@ sub traverse_gopher_page_recursively{
 			}
 		}
 	}
-
-	# data_commit($DBH);
-	return 1;
 }
 
 sub request_gopher{
