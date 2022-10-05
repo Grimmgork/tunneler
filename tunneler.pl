@@ -168,6 +168,8 @@ sub traverse_gopher_page_recursively{
 
 	# iterate all endpoints
 	foreach my $row (@rows) {
+		last if($row eq "."); # end of gopher page
+
 		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^(.)([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
 
 		if($rowtype =~ /^[i3]$/){ # rowtype i and 3 are ignored
@@ -191,19 +193,8 @@ sub traverse_gopher_page_recursively{
 			next;
 		}
 
-		if(($rowhost eq $host->name) && ($rowport eq $host->port)){ # link to current host
-			# register endpoint
-			my $pathref = "$rowtype$rowpath";
-			unless(data_get_endpoint_id($rowpath)) {
-				print "$pathref\n";
-				if($rowtype eq "1"){
-					traverse_gopher_page_recursively($host, $rowpath, $depth-1)
-				}else{
-					data_try_add_endpoint($DBH, $rowhost, $rowport, $rowtype, $rowpath, 0);
-				}
-			}
-		}
-		else # link to foreign host
+		# link to foreign host
+		unless(($rowhost eq $host->name) && ($rowport eq $host->port)){ 
 		{
 			unless($rowtype =~ /^[8T+2]$/){
 				# exclude *.onion and ftp.* domains
@@ -217,6 +208,18 @@ sub traverse_gopher_page_recursively{
 				}
 				data_increment_reference($DBH, $host->name, $host->port, $rowhost, $rowport);
 				print " ~ REF: $rowhost:$rowport\n";
+			}
+			next;
+		}
+
+		# register local host endpoint
+		my $pathref = "$rowtype$rowpath";
+		unless(data_get_endpoint_id($rowpath)) {
+			print "$pathref\n";
+			if($rowtype eq "1"){
+				traverse_gopher_page_recursively($host, $rowpath, $depth-1)
+			}else{
+				data_try_add_endpoint($DBH, $rowhost, $rowport, $rowtype, $rowpath, 0);
 			}
 		}
 	}
