@@ -192,10 +192,12 @@ sub traverse_gopher_page_recursively{
 		if(($rowport eq "") or not defined $rowport){
 			next;
 		}
+		
+		# todo: extract host from U type urls and store in refs. like gopher.host:70->URL:http://google.com <- omit the path, only protocol and host
+		# treat gopher urls as normal references?
 
 		# link to foreign host
-		unless(($rowhost eq $host->name) && ($rowport eq $host->port)){ 
-		{
+		unless(($rowhost eq $host->name) && ($rowport eq $host->port)){
 			unless($rowtype =~ /^[8T+2]$/){
 				# exclude *.onion and ftp.* domains
 				if($rowhost =~ /(^ftp\.|\.onion$)/gi){
