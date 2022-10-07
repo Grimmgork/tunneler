@@ -79,7 +79,7 @@ sub data_load_endpoint_cache_for_host{
 	%ENDPOINT_CACHE_ID = ();
 	%ENDPOINT_CACHE_STATUS = ();
 	return unless(defined $db && defined $host && defined $port);
-	my $sth = $db->prepare("select id, path, status from endpoints where hostid=? and type!='U'");
+	my $sth = $db->prepare("select id, path, status from endpoints where hostid=?");
 	$sth->execute(data_get_host_id($host, $port));
 	while(my ($id, $path, $status) = $sth->fetchrow_array){
 		$ENDPOINT_CACHE_ID{$path} = $id;
@@ -92,9 +92,6 @@ sub data_try_add_endpoint{
 	if(my $id = $ENDPOINT_CACHE_ID{$path}){
 		return $id;
 	}
-	if($type eq "U"){
-		return data_add_endpoint_type_u($db, $host, $port, $path, $status);
-	}
 
 	my $sth = $db->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
 	$sth->execute(data_get_host_id($host, $port), $type, $path, $status);
@@ -102,13 +99,6 @@ sub data_try_add_endpoint{
 	$ENDPOINT_CACHE_ID{$path} = $id;
 	$ENDPOINT_CACHE_STATUS{$id} = $status;
 	return $id;
-}
-
-sub data_add_endpoint_type_u{
-	my($db, $host, $port, $path, $status) = @_;
-	my $sth = $db->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
-	$sth->execute(data_get_host_id($host, $port), "U", $path, $status);
-	return $db.sqlite_last_insert_rowid;
 }
 
 sub data_set_endpoint_status{

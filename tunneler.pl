@@ -171,19 +171,22 @@ sub traverse_gopher_page_recursively{
 	foreach my $row (@rows) {
 		last if($row eq "."); # end of gopher page
 
-		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^(.)([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
-
-		if($rowtype =~ /^[i3]$/){ # rowtype i and 3 are ignored
+		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^([^i3])([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
+		unless(defined $rowtype){ # rowtype i and 3 are ignored
 			next;
 		}
 
 		if(my ($url) = $rowpath =~ m/^UR[LI]:(.*)/gi){ # extract a full url reference like: URL:http://example.com
-			$rowpath = $url;
-			$rowtype = "U";
-		}else{
-			$rowpath = clean_path($rowpath);
+			my($protocol, $hostname) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
+			unless(defined $protocol){
+				next;
+			}
+			print " ~ REF: URL:$protocol://$hostname\n";
+			data_increment_reference($DBH, $host->name, $host->port, "URL:$protocol", "//$hostname"); # a little trick, the query will convert it to "URL:$protocol://$hostname"
+			next;
 		}
 
+		$rowpath = clean_path($rowpath);
 		$rowhost = trim(lc $rowhost); # lowercase and trim the domain name
 
 		if(($rowhost eq "") or not defined $rowhost){
@@ -194,7 +197,6 @@ sub traverse_gopher_page_recursively{
 			next;
 		}
 		
-		# todo: extract host from U type urls and store in refs. like gopher.host:70->URL:http://google.com <- omit the path, only protocol and host
 		# treat gopher urls as normal references?
 
 		# link to foreign host
