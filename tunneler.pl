@@ -18,25 +18,6 @@ print "INDEXING ...\n";
 my $DBH = data_connect("gopherspace.db");
 print "DONE!\n";
 
-#test
-#data_register_new_host($DBH, "gopher.floodgap.com", 70);
-#data_add_endpoint($DBH, "gopher.floodgap.com", 70, "I", "/kek/lel", 0);
-#print data_is_endpoint_registered($DBH, "gopher.floodgap.com", 70, "/kek/les");
-
-# data_load_endpoint_cache_for_host($DBH, "sdf.org", 70);
-# print data_try_add_endpoint($DBH, "sdf.org", 70, "I" , "/ma", 1);
-
-# print prompt("input?"), "\n";
-
-#my($host, $port) = split_host_port(prompt("host:port?"));
-#print "$host\n$port\n";
-#my $rowpath = "uri:http://google.com";
-#if(my ($url) = $rowpath =~ m/^UR[LI]:(.*)/gi){
-#	print $url, "\n";
-#}
-
-#exit();
-
 # prompt user for a host if no unvisited host is known
 unless(data_get_first_host_unvisited($DBH)){
 	my $inpt = defined $ARGV[0] ? $ARGV[0] : prompt("host:port?");
