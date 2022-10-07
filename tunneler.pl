@@ -18,6 +18,7 @@ print "INDEXING ...\n";
 my $DBH = data_connect("gopherspace.db");
 print "DONE!\n";
 
+#test
 #data_register_new_host($DBH, "gopher.floodgap.com", 70);
 #data_add_endpoint($DBH, "gopher.floodgap.com", 70, "I", "/kek/lel", 0);
 #print data_is_endpoint_registered($DBH, "gopher.floodgap.com", 70, "/kek/les");
