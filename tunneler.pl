@@ -148,7 +148,7 @@ sub traverse_gopher_page_recursively{
 	data_set_endpoint_status($DBH, $endpoint_id, 1);
 	printf " -> MAP: %s:%s 1%s\n", $host->name, $host->port, $path;
 
-	# iterate all endpoints
+	# iterate rows
 	foreach my $row (@rows) {
 		last if($row eq "."); # end of gopher page
 
@@ -177,12 +177,10 @@ sub traverse_gopher_page_recursively{
 		if(($rowport eq "") or not defined $rowport){
 			next;
 		}
-		
-		# treat gopher urls as normal references?
 
 		# link to foreign host
 		unless(($rowhost eq $host->name) && ($rowport eq $host->port)){
-			unless($rowtype =~ /^[8T+2]$/){
+			if($rowtype =~ /^[^8T+2]$/){
 				# exclude *.onion and ftp.* domains
 				if($rowhost =~ /(^ftp\.|\.onion$)/gi){
 					next;
