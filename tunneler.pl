@@ -22,18 +22,12 @@ struct PathNode => {
 };
 
 #my $root=PathNode->new();
-#$root->gophertype('1');
 
-#for((1..1000)){
-#	my $path = join "/", "/test/kajdkjawkd/adkajwdkjawkdj", rand(0xffffffff);
-#	print try_add_path_to_endpoints($root, $path), "\n";
-#}
-
-#try_add_path_to_endpoints($root, "/kek/lel/kok.");
-#try_add_path_to_endpoints($root, "/kek/lel/k");
-
-#print get_full_endpoint_path($leave, ());
-
+#my @endpoints = try_add_path_to_endpoints($root, split(/\//, "/kek/lel/kok"));
+#my $leaf = @endpoints[0];
+#my $count = @endpoints;
+#print "$count\n";
+#print get_full_endpoint_path($leaf);
 #exit();
 
 my $PING = "8.8.8.8";
@@ -73,11 +67,12 @@ sub try_register_host{
 }
 
 sub try_add_path_to_endpoints{
-	my ($root, $path, $type) = @_;
-	my @segments = split(/\//, $path);
-	shift @segments;
+	my ($root, @segments, $type) = @_;
+	if($segments[0] eq ""){
+		shift @segments;
+	}
 	my $current = $root;
-	my $isnew = undef;
+	my @newendpoints = ();
 	foreach my $segment ( @segments ) {
 		# search children
 		my $found = undef;
@@ -89,38 +84,29 @@ sub try_add_path_to_endpoints{
 		}
 		unless(defined $found){
 			# add new segment-node
-			$isnew = 1;
 			$found = PathNode->new();
 			$found->name($segment);
 			$found->parent($current);
 			$found->gophertype("0");
 			push @{$current->childs}, $found;
+			push @{\@newendpoints}, $found;
 		}
 
 		$current = $found;
-		# set $current to the found/new segment-node
 	}
 
-	if(defined $isnew){
-		return $current;
-	}
-
-	return undef; #if it is already in the structure
-}
-
-sub get_next_unvisited_endpoint_depth_first{
-	my ($root, $node) = @_;
-
-	return;
+	return @newendpoints;
 }
 
 sub get_full_endpoint_path{
-	my ($node, @segments) = @_;
-	unshift(@segments, $node->name);
+	my ($node) = @_;
+	bless $node, "PathNode";
 	unless(defined $node->parent){
-		return join("/", @segments);
+		return $node->name;
 	}
-	return get_full_endpoint_path($node->parent, @segments);
+	my $name = $node->name;
+	my $path = get_full_endpoint_path($node->parent);
+	return "$path/$name";
 }
 
 sub traverse_host{
@@ -130,16 +116,21 @@ sub traverse_host{
 	$host->name($hostname);
 	$host->port($port);
 
+	my @unvisited = ();
+	my $root=PathNode->new();
+	push(@unvisited, $root);
+	
 	data_load_endpoint_cache_for_host($DBH, $host, $port); # prepare database for host
 
-	my $err = traverse_gopher_page_recursively($host, "", 5); # recursively traverse gopher menus of host, starting with the index page "/".
-	if(defined $err){
-		data_set_host_status($DBH, $hostname, $port, 1); # traversed
-	}else{
-		data_set_host_status($DBH, $hostname, $port, $err+1); # error occured
+	while(my $node = pop @unvisited){
+		my $count = @unvisited;
+		print "LENGTH: $count\n";
+		print "VISITING: ", get_full_endpoint_path($node), "\n";
+		traverse_gopher_page($host, get_full_endpoint_path($node), $root, @unvisited);
 	}
-	
+
 	data_load_endpoint_cache_for_host(); # unload endpoint-cache
+	data_set_host_status($DBH, $host->name, $host->port, 1);
 	return $host;
 }
 
@@ -183,18 +174,10 @@ sub wait_for_internet_connection{
 	}
 }
 
-sub traverse_gopher_page_recursively{
-	my($host, $path, $depth) = @_;
+sub traverse_gopher_page{
+	my($host, $path, $root, @unvisited) = @_;
 
-	# dont wander into deep, dark caverns ... o~o
-	if($depth < 0 || $path =~ /(\/commit\/|archive|.git)/gi){ 
-		return 2; # self restriction error
-	}
-
-	$path = clean_path($path);
-
-	# get the id of the endpoint
-	my $endpoint_id = data_try_add_endpoint($DBH, $host->name, $host->port, 1, $path, 0);
+	printf " -> ENTER: %s:%s 1%s\n", $host->name, $host->port, $path;
 
 	# try request gopher page
 	my @rows;
@@ -205,25 +188,22 @@ sub traverse_gopher_page_recursively{
 		return 3; # external error
 	}
 
-	printf " -> ENTER: %s:%s 1%s\n", $host->name, $host->port, $path;
-
 	# iterate rows
 	foreach my $row (@rows) {
 		last if($row eq "."); # end of gopher page
 
 		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^([^i3])([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
-		unless(defined $rowtype){ # rowtype i and 3 are ignored
+		unless(defined $rowtype){ # rowtype i and 3 and invalid rows are ignored
 			next;
 		}
 
 		if(my ($url) = $rowpath =~ m/^UR[LI]:(.*)/gi)
 		{ # extract a full url reference like: URL:http://example.com
 			my($protocol, $hostname) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
-			unless(defined $protocol){
-				next;
+			if(defined $protocol){
+				print " ~ REF: URL:$protocol://$hostname\n";
+				data_increment_reference($DBH, $host->name, $host->port, "URL:$protocol", "//$hostname"); # a little trick, the query will convert it to "URL:$protocol://$hostname"
 			}
-			print " ~ REF: URL:$protocol://$hostname\n";
-			data_increment_reference($DBH, $host->name, $host->port, "URL:$protocol", "//$hostname"); # a little trick, the query will convert it to "URL:$protocol://$hostname"
 			next;
 		}
 
@@ -250,31 +230,19 @@ sub traverse_gopher_page_recursively{
 
 		if(($rowhost eq $host->name) && ($rowport eq $host->port))
 		{ # endpoint of current host
-			unless(defined data_get_endpoint_id($rowpath)) {
-				print "$rowtype$rowpath\n";
-				if($rowtype eq "1"){
-					# traverse gopher page and hendle the error
-					my $err = traverse_gopher_page_recursively($host, $rowpath, $depth-1);
-					if($err != 0)
-					{ # error occured while traversal
-						if($err == 2) { printf " -> SKIP: %s:%s 1%s\n", $host->name, $host->port, $path; }
-						elsif ($err == 3) { print " X EXTERNAL ERROR: $@ \n"; }
-						else { print " ? UNKNOWN ERROR\n"; }
-					}
-					else{
-						# successful traversal
-						printf " -> DONE: %s:%s 1%s\n", $host->name, $host->port, $path;
-					}
-					data_set_endpoint_status($DBH, $endpoint_id, 1 + $err);
-				}
-				else{
-					data_try_add_endpoint($DBH, $rowhost, $rowport, $rowtype, $rowpath, 0);
-				}
+			# make sure all endpoints of path are discovered
+			my @new = try_add_path_to_endpoints($root, split(/\//, $rowpath), $rowtype);
+			unless($rowtype eq "1"){
+				pop @new;
+			}
+			foreach(@new){
+				print "NEW Endpoint ", get_full_endpoint_path($_), "\n";
+				push(@unvisited, $_);
+				print "COUNT: ", scalar(@unvisited), "\n";
 			}
 		}
 		else
-		{
-			# link to foreign host
+		{ # link to foreign host
 			# make sure host is registered
 			if(defined try_register_host($rowhost, $rowport)){ 
 				print " * DICOVERED: $rowhost:$rowport\n";
