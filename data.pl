@@ -2,6 +2,8 @@ use DBI;
 
 my %HOST_IDS;
 my $DBH;
+my $DB_PREP_ADD_ENDPOINT;
+my $DB_PREP_SET_ENDPOINT_STATUS;
 
 sub data_connect{
 	my($path) = @_;
@@ -23,6 +25,7 @@ sub data_connect{
 	}
 	
 	$DBH = $db;
+	$DB_PREP_ADD_ENDPOINT = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
 }
 
 sub data_disconnect{
@@ -58,9 +61,9 @@ sub data_get_first_host_unvisited{
 }
 
 sub data_set_host_status{
-	my($host, $port, $status) = @_;
-	my $sth = $DBH->prepare("update hosts set status=? where host=?");
-	$sth->execute($status, "$host:$port");
+	my($id, $status) = @_;
+	my $sth = $DBH->prepare("update hosts set status=? where id=?");
+	$sth->execute($status, $id);
 }
 
 
@@ -68,8 +71,8 @@ sub data_set_host_status{
 
 sub data_add_endpoint{
 	my($hostid, $type, $path, $status) = @_;
-	my $sth = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
-	$sth->execute($hostid, $type, $path, $status);
+	#my $sth = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
+	$DB_PREP_ADD_ENDPOINT->execute($hostid, $type, $path, $status);
 	return $DBH->last_insert_id();
 }
 
