@@ -1,8 +1,7 @@
 use DBI;
 
 my %HOST_IDS;
-my %ENDPOINT_CACHE_ID;
-my %ENDPOINT_CACHE_STATUS;
+my $DBH;
 
 sub data_connect{
 	my($path) = @_;
@@ -23,17 +22,11 @@ sub data_connect{
    		$HOST_IDS{$host} = $id;
 	}
 	
-	return $db;
+	$DBH = $db;
 }
 
 sub data_disconnect{
-	my($db) = @_;
-	$db->disconnect;
-}
-
-sub data_commit{
-	my($db) = @_;
-	$db->commit() or die $dbh->errstr;
+	$DBH->disconnect;
 }
 
 sub data_get_host_id{
@@ -44,10 +37,10 @@ sub data_get_host_id{
 # ### HOSTS:
 
 sub data_register_new_host{
-	my($db, $host, $port) = @_;
-	my $sth = $db->prepare("insert into hosts (host, status) values (?, ?);");
+	my($host, $port) = @_;
+	my $sth = $DBH->prepare("insert into hosts (host, status) values (?, ?);");
 	$sth->execute("$host:$port", 0);
-	my $id = $db->sqlite_last_insert_rowid;
+	my $id = $DBH->sqlite_last_insert_rowid;
    	$HOST_IDS{"$host:$port"} = $id;
 	return $id;
 }
@@ -59,84 +52,52 @@ sub data_is_host_registered{
 }
 
 sub data_get_first_host_unvisited{
-	my($db) = @_;
-	my $sth = $db->prepare("select id, host from hosts where status=0 LIMIT 1");
+	my $sth = $DBH->prepare("select id, host from hosts where status=0 LIMIT 1");
 	$sth->execute;
 	return $sth->fetchrow_array;
 }
 
 sub data_set_host_status{
-	my($db, $host, $port, $status) = @_;
-	my $sth = $db->prepare("update hosts set status=? where host=?");
+	my($host, $port, $status) = @_;
+	my $sth = $DBH->prepare("update hosts set status=? where host=?");
 	$sth->execute($status, "$host:$port");
 }
 
 
 # ### ENDPOINTS:
 
-sub data_load_endpoint_cache_for_host{
-	my($db, $host, $port) = @_;
-	%ENDPOINT_CACHE_ID = ();
-	%ENDPOINT_CACHE_STATUS = ();
-	return unless(defined $db && defined $host && defined $port);
-	my $sth = $db->prepare("select id, path, status from endpoints where hostid=?");
-	$sth->execute(data_get_host_id($host, $port));
-	while(my ($id, $path, $status) = $sth->fetchrow_array){
-		$ENDPOINT_CACHE_ID{$path} = $id;
-		$ENDPOINT_CACHE_STATUS{$id} = $status;
-	}
-}
-
-sub data_try_add_endpoint{
-	my($db, $host, $port, $type, $path, $status) = @_;
-	if(my $id = $ENDPOINT_CACHE_ID{$path}){
-		return $id;
-	}
-
-	my $sth = $db->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
-	$sth->execute(data_get_host_id($host, $port), $type, $path, $status);
-	my $id = $db.sqlite_last_insert_rowid;
-	$ENDPOINT_CACHE_ID{$path} = $id;
-	$ENDPOINT_CACHE_STATUS{$id} = $status;
-	return $id;
-}
-
-sub data_set_endpoint_status{
-	my($db, $id, $status) = @_;
-	$ENDPOINT_CACHE_ID{$path} = $status;
-	my $sth = $db->prepare("update endpoints set status=? where id=?");
-	$sth->execute($status, $id);
-}
-
-sub data_get_endpoints_where_status{
-	my($db, $host, $port, $status) = @_;
-	my $sth = $db->prepare("select * from endpoints where hostid=? and status=?");
-	$sth->execute(data_get_host_id("$host:$port"), $status);
-	return $sth->fetchrow_array;
+sub data_add_endpoint{
+	my($hostid, $type, $path, $status) = @_;
+	my $sth = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
+	$sth->execute($hostid, $type, $path, $status);
+	return $DBH->last_insert_id();
 }
 
 sub data_set_endpoint_status{
 	my($id, $status) = @_;
-	$ENDPOINT_CACHE_STATUS{$id} = $status;
+	my $sth = $DBH->prepare("update endpoints set status=? where id=?");
+	$sth->execute($status, $id);
 }
 
-sub data_get_endpoint_status{
-	my($id) = @_;
-	return $ENDPOINT_CACHE_STATUS{$id};
+sub data_get_endpoints_where_status{
+	my($host, $port, $status) = @_;
+	my $sth = $DBH->prepare("select * from endpoints where hostid=? and status=?");
+	$sth->execute(data_get_host_id("$host:$port"), $status);
+	return $sth->fetchall_arrayref();
 }
 
-sub data_get_endpoint_id{
-	my($path) = @_;
-	return $ENDPOINT_CACHE_ID{$path};
+sub data_get_endpoints_from_host{
+	my($hostid) = @_;
+	my $sth = $DBH->prepare("select * from endpoints where hostid=?");
+	$sth->execute($hostid);
+	return $sth->fetchall_arrayref();
 }
-
-
 
 # ### REFERENCES:
 
 sub data_refs_get_count{
-	my($db, $from_host, $from_port, $to_host, $to_port) = @_;
-	my $sth = $db->prepare("select * from refs where pair=? LIMIT 1");
+	my($from_host, $from_port, $to_host, $to_port) = @_;
+	my $sth = $DBH->prepare("select * from refs where pair=? LIMIT 1");
 	$sth->execute("$from_host:$from_port=>$to_host:$to_port");
 	my(undef, $count) = $sth->fetchrow_array;
 	unless(defined $count){
@@ -146,13 +107,13 @@ sub data_refs_get_count{
 }
 
 sub data_increment_reference{
-	my($db, $from_host, $from_port, $to_host, $to_port) = @_;
-	my $count = data_refs_get_count($db, $from_host, $from_port, $to_host, $to_port);
+	my($from_host, $from_port, $to_host, $to_port) = @_;
+	my $count = data_refs_get_count($from_host, $from_port, $to_host, $to_port);
 	unless($count){
-		$db->do("insert into refs (pair, count) values (?, ?)", undef, "$from_host:$from_port=>$to_host:$to_port", 1); # insert new row
+		$DBH->do("insert into refs (pair, count) values (?, ?)", undef, "$from_host:$from_port=>$to_host:$to_port", 1); # insert new row
 		return;
 	}
-	$db->do("update refs set count=? where pair=?", undef, $count+1, "$from_host:$from_port=>$to_host:$to_port");
+	$DBH->do("update refs set count=? where pair=?", undef, $count+1, "$from_host:$from_port=>$to_host:$to_port");
 }
 
 1;

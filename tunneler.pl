@@ -10,43 +10,55 @@ require './data.pl';
 struct Host => {
 	name => '$',
 	port => '$',
-	refs => '%',
-	endpoints => '%'
+	root => '$',
+	dbid => '$',
+	unvisited => '@'
 };
 
 struct PathNode => {
 	parent => '$',
 	name => '$',
 	gophertype => '$',
-	childs => '@'
+	childs => '@',
+	dbid => '$'
 };
 
-#my $root=PathNode->new();
+# my $host = Host->new();
+# $host->name("sdf.org");
+# $host->port(70);
 
-#my @endpoints = try_add_path_to_endpoints($root, split(/\//, "/kek/lel/kok"));
-#my $leaf = @endpoints[0];
-#my $count = @endpoints;
-#print "$count\n";
-#print get_full_endpoint_path($leaf);
-#exit();
+# my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle"));
+# my $count = @{$endpoints};
+# print "$count\n";
+# print "$node\n";
+# print get_full_endpoint_path($node);
+# exit();
 
 my $PING = "8.8.8.8";
 print "INDEXING ...\n";
-my $DBH = data_connect("gopherspace.db");
+data_connect("gopherspace.db");
 print "DONE!\n";
 
+# data_set_endpoint_status(1, "0");
+
 # prompt user for a host if no unvisited host is in the database
-unless(data_get_first_host_unvisited($DBH)){
+unless(data_get_first_host_unvisited()){
 	my $inpt = defined $ARGV[0] ? $ARGV[0] : prompt("host:port?");
 	my ($host, $port) = split_host_port($inpt);
-	data_register_new_host($DBH, $host, $port);
+	data_register_new_host($host, $port);
 }
 
 # main loop
-while(my ($id, $host) = data_get_first_host_unvisited($DBH)) {
-	my ($hostname, $port) = split_host_port($host);
-	print "### START HOST: $hostname:$port ###\n";
-	traverse_host($hostname, $port);
+while(my ($id, $hostandport) = data_get_first_host_unvisited()) {
+	my ($hostname, $port) = split_host_port($hostandport);
+	print "### START HOST: id:$id $hostname:$port ###\n";
+	# init picked host
+	my $host=Host->new();
+	$host->name($hostname);
+	$host->port($port);
+	$host->dbid($id);
+
+	traverse_host($host);
 }
 
 sub split_host_port{
@@ -58,22 +70,26 @@ sub split_host_port{
 
 sub try_register_host{
 	my ($hostname, $port) = @_;
-
-	return undef if($hostname eq "");
-	return undef if($port eq "");
 	return undef if(data_is_host_registered($hostname, $port));
-	
-	return data_register_new_host($DBH, $hostname, $port);
+	return data_register_new_host($hostname, $port);
 }
 
 sub try_add_path_to_endpoints{
-	my ($root, @segments, $type) = @_;
-	if($segments[0] eq ""){
+	my ($host, $type, @segments, $max_depth) = @_;
+	my $current = $host->root;
+	my @newendpoints = ();
+	if(not defined $current){
+		$current = PathNode->new();
+		$current->name("");
+		$current->gophertype("1");
+		$host->root($current);
+		push @{\@newendpoints}, $current;
 		shift @segments;
 	}
-	my $current = $root;
-	my @newendpoints = ();
+	
+	my $i = 0;
 	foreach my $segment ( @segments ) {
+		$i++;
 		# search children
 		my $found = undef;
 		foreach (@{$current->childs}){
@@ -87,15 +103,18 @@ sub try_add_path_to_endpoints{
 			$found = PathNode->new();
 			$found->name($segment);
 			$found->parent($current);
-			$found->gophertype("0");
+			$found->gophertype("1");
+
 			push @{$current->childs}, $found;
 			push @{\@newendpoints}, $found;
 		}
 
 		$current = $found;
 	}
-
-	return @newendpoints;
+	if($i == @segments){
+		$current->gophertype($type); # set the last segment as the type ... 0~0
+	}
+	return (\@newendpoints, $current);
 }
 
 sub get_full_endpoint_path{
@@ -110,27 +129,41 @@ sub get_full_endpoint_path{
 }
 
 sub traverse_host{
-	my ($hostname, $port) = @_;
+	my ($host) = @_;
 
-	my $host=Host->new();
-	$host->name($hostname);
-	$host->port($port);
-
-	my @unvisited = ();
-	my $root=PathNode->new();
-	push(@unvisited, $root);
-	
-	data_load_endpoint_cache_for_host($DBH, $host, $port); # prepare database for host
-
-	while(my $node = pop @unvisited){
-		my $count = @unvisited;
-		print "LENGTH: $count\n";
-		print "VISITING: ", get_full_endpoint_path($node), "\n";
-		traverse_gopher_page($host, get_full_endpoint_path($node), $root, @unvisited);
+	# load all known endpoints for this host into cache
+	print "Loading known endpoints for ", $host->name, " ", $host->port, " ...\n";
+	my $rows = data_get_endpoints_from_host($host->dbid);
+	foreach my $row (@$rows){
+		my ($addet, $endpoint) = try_add_path_to_endpoints($host,  @$row[2], split("/", @$row[3]));
+		if(@$addet == 0){ # if its already in the cache
+			print "already in cache!\n";
+			next;
+		}
+		if(@$row[4] == 0 && @$row[2] == 1){ # if unvisited and is a gopher page
+			push @{$host->unvisited}, $endpoint; #add to unvisited
+		}
+	}
+	print "Done!\n";
+	my $count = @{$host->unvisited};
+	print "$count unvisited nodes\n";
+	foreach my $pth (@{$host->unvisited}){
+		print $pth->name, "\n";
 	}
 
-	data_load_endpoint_cache_for_host(); # unload endpoint-cache
-	data_set_host_status($DBH, $host->name, $host->port, 1);
+	prompt();
+	my $root = try_add_path_to_endpoints($host, "1", (""));
+	if(defined $root){
+		push @{$host->unvisited}, $root;
+	}
+	
+	while(my $node = shift(@{$host->unvisited})){
+		my $err = traverse_gopher_page($host, get_full_endpoint_path($node));
+		my $id = $node->dbid;
+		data_set_endpoint_status($node->dbid, 1 + $err);
+	}
+
+	#data_set_host_status($host->name, $host->port, 1);
 	return $host;
 }
 
@@ -175,7 +208,7 @@ sub wait_for_internet_connection{
 }
 
 sub traverse_gopher_page{
-	my($host, $path, $root, @unvisited) = @_;
+	my($host, $path) = @_;
 
 	printf " -> ENTER: %s:%s 1%s\n", $host->name, $host->port, $path;
 
@@ -202,7 +235,7 @@ sub traverse_gopher_page{
 			my($protocol, $hostname) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
 			if(defined $protocol){
 				print " ~ REF: URL:$protocol://$hostname\n";
-				data_increment_reference($DBH, $host->name, $host->port, "URL:$protocol", "//$hostname"); # a little trick, the query will convert it to "URL:$protocol://$hostname"
+				data_increment_reference($host->name, $host->port, "URL:$protocol", "//$hostname"); # a little trick, the query will convert it to "URL:$protocol://$hostname"
 			}
 			next;
 		}
@@ -231,14 +264,13 @@ sub traverse_gopher_page{
 		if(($rowhost eq $host->name) && ($rowport eq $host->port))
 		{ # endpoint of current host
 			# make sure all endpoints of path are discovered
-			my @new = try_add_path_to_endpoints($root, split(/\//, $rowpath), $rowtype);
-			unless($rowtype eq "1"){
-				pop @new;
-			}
+			my @new = try_add_path_to_endpoints($host, $rowtype, split(/\//, $rowpath));
 			foreach(@new){
-				print "NEW Endpoint ", get_full_endpoint_path($_), "\n";
-				push(@unvisited, $_);
-				print "COUNT: ", scalar(@unvisited), "\n";
+				if($_->gophertype eq "1"){
+					push(@{$host->unvisited}, $_);
+				}
+				$_->dbid(data_add_endpoint($host->dbid, $rowtype, get_full_endpoint_path($_), 0));
+				print "$rowtype $rowpath\n";
 			}
 		}
 		else
@@ -248,7 +280,7 @@ sub traverse_gopher_page{
 				print " * DICOVERED: $rowhost:$rowport\n";
 			}
 
-			data_increment_reference($DBH, $host->name, $host->port, $rowhost, $rowport);
+			data_increment_reference($host->name, $host->port, $rowhost, $rowport);
 			print " ~ REF: $rowhost:$rowport\n";
 		}
 	}
@@ -275,12 +307,12 @@ sub request_gopher{
 	my $selector = new IO::Select();
 	$selector->add($socket);
 
-	unless(defined $selector->can_read(7)){
+	unless(defined $selector->can_read(5)){
 		close($socket);
 		die "TIMEOUT!";
 	}
 
-	my @result = <$socket>;
-	close($socket);
-	return @result; # split /\r\n/, $response;
+	#my @result = <$socket>;
+	#close($socket);
+	return <$socket>; # split /\r\n/, $response;
 }
