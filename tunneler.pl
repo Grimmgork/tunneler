@@ -23,28 +23,28 @@ struct PathNode => {
 	dbid => '$'
 };
 
-  my $host = Host->new();
-  $host->name("sdf.org");
-  $host->port(70);
+#   my $host = Host->new();
+#   $host->name("sdf.org");
+#   $host->port(70);
 
-  # try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle"));
-  #my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle/lol"));
-  my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle/lol"));
-  my $count = @$endpoints;
-  if(@$endpoints == 4){
-	print "YAY\n";
-  }
-  my $ep = $node;
-  while($ep){
- 	print $ep->name, "\n";
- 	if(defined $ep->parent){
- 		$ep = $ep->parent;
- 	}
- 	else{
- 		last;
- 	}
- }
- exit();
+#   # try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle"));
+#   #my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle/lol"));
+#   my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle/lol"));
+#   my $count = @$endpoints;
+#   if(@$endpoints == 4){
+# 	print "YAY\n";
+#   }
+#   my $ep = $node;
+#   while($ep){
+#  	print $ep->name, "\n";
+#  	if(defined $ep->parent){
+#  		$ep = $ep->parent;
+#  	}
+#  	else{
+#  		last;
+#  	}
+#  }
+#  exit();
 
 my $PING = "8.8.8.8";
 print "INDEXING ...\n";
@@ -90,7 +90,7 @@ sub try_register_host{
 }
 
 sub try_add_path_to_endpoints{
-	my ($host, $type, @segments, $max_depth) = @_;
+	my ($host, $type, @segments) = @_;
 	my $current = $host->root;
 	my @newendpoints = ();
 
@@ -102,6 +102,7 @@ sub try_add_path_to_endpoints{
 		push @{\@newendpoints}, $current;
 	}
 
+	# assume there is always a empty root segment
 	shift(@segments);
 	
 	foreach my $segment ( @segments ) {
@@ -125,7 +126,8 @@ sub try_add_path_to_endpoints{
 		}
 		$current = $found;
 	}
-	$current->gophertype($type); # set the last segment as the type ... 0~0
+	# set the last segments type and id ... O~O
+	$current->gophertype($type);
 	return (\@newendpoints, $current);
 }
 
@@ -147,7 +149,7 @@ sub traverse_host{
 	print "Loading known endpoints for ", $host->name, " ", $host->port, " ...\n";
 	my $rows = data_get_endpoints_from_host($host->dbid);
 	foreach my $row (@$rows){
-		my ($addet, $endpoint) = try_add_path_to_endpoints($host,  @$row[2], split(/\//, clean_path(@$row[3])));
+		my ($addet, $endpoint) = try_add_path_to_endpoints($host, @$row[2], split(/\//, clean_path(@$row[3])));
 		if(@$addet == 0){ # if its already in the cache
 			print "duplicate endpoint in database!\n";
 			next;
@@ -197,8 +199,7 @@ sub clean_path{
 	if($path eq ""){
 		return "";
 	}
-	$path = "/$path";
-	return $path;
+	return "/$path";
 }
 
 sub has_internet_connection{
@@ -285,7 +286,7 @@ sub traverse_gopher_page{
 		else
 		{ # link to foreign host
 			# make sure host is registered
-			if(defined try_register_host($rowhost, $rowport)){ 
+			if(defined try_register_host($rowhost, $rowport)){
 				print " * DICOVERED: $rowhost:$rowport\n";
 			}
 			data_increment_reference($host->name, $host->port, $rowhost, $rowport);
@@ -307,7 +308,7 @@ sub request_gopher{
 	);
 
 	unless(defined $socket){
-		die "CONNECTION";
+		die "CONNECTION ERROR!";
 	}
 
 	$socket->send("$path\n");
@@ -317,7 +318,7 @@ sub request_gopher{
 
 	unless(defined $selector->can_read(5)){
 		close($socket);
-		die "TIMEOUT!";
+		die "TIMEOUT ERROR!";
 	}
 
 	return <$socket>;

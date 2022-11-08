@@ -71,7 +71,6 @@ sub data_set_host_status{
 
 sub data_add_endpoint{
 	my($hostid, $type, $path, $status) = @_;
-	#my $sth = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
 	$DB_PREP_ADD_ENDPOINT->execute($hostid, $type, $path, $status);
 	return $DBH->last_insert_id();
 }
