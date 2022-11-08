@@ -37,10 +37,7 @@ struct PathNode => {
 #   # try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle"));
 #   #my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle/lol"));
 #   my ($endpoints, $node) = try_add_path_to_endpoints($host, "1", split(/\//, "/kek/kle/lol"));
-#   my $count = @$endpoints;
-#   if(@$endpoints == 4){
-# 	print "YAY\n";
-#   }
+#   print get_full_endpoint_path($node), "\n";
 #   my $ep = $node;
 #   while($ep){
 #  	print $ep->name, "\n";
@@ -52,6 +49,9 @@ struct PathNode => {
 #  	}
 #  }
 #  exit();
+
+# print clean_path("  kek/lel/kok/ ");
+# exit();
 
 print "INDEXING ...\n";
 data_connect(FILE_DB);
@@ -138,13 +138,14 @@ sub try_add_path_to_endpoints{
 }
 
 sub get_full_endpoint_path{
-	my ($node) = @_;
-	bless $node, "PathNode";
-	unless(defined $node->parent){
-		return $node->name;
+	#my ($node) = @_;
+	#bless $_[0], "PathNode";
+	# $_[0] => the node for wich the path shall be constructed
+	unless(defined $_[0]->parent){
+		return $_[0]->name;
 	}
-	my $name = $node->name;
-	my $path = get_full_endpoint_path($node->parent);
+	my $name = $_[0]->name;
+	my $path = get_full_endpoint_path($_[0]->parent);
 	return "$path/$name";
 }
 
@@ -172,13 +173,19 @@ sub traverse_host{
 	if(@$addet > 0){
 		push @{$host->unvisited}, $root;
 	}
-	
+
+	my $lastreport = time();
 	# check out every gopher page until the unvisited list is empty
 	while(my $node = shift(@{$host->unvisited})){
 		my $err = traverse_gopher_page($host, get_full_endpoint_path($node));
 		my $id = $node->dbid;
 		data_set_endpoint_status($node->dbid, 1 + $err);
-		report_status($host);
+		
+		# report after 5 seconds
+		if(time()-$lastreport > 5){
+			report_status($host);
+			$lastreport = time();
+		}
 	}
 
 	data_set_host_status($host->dbid, 1);
@@ -256,10 +263,10 @@ sub traverse_gopher_page{
 	}
 
 	# iterate rows
-	foreach my $row (@rows) {
-		last if($row eq "."); # end of gopher page
+	foreach(@rows) {
+		last if($_ eq "."); # end of gopher page
 
-		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $row =~ m/^([^i3])([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
+		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $_ =~ m/^([^i3])([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
 		unless(defined $rowtype){ # rowtype i and 3 and invalid rows are ignored
 			next;
 		}
