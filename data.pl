@@ -28,6 +28,8 @@ sub data_connect{
 	$DB_PREP_ADD_ENDPOINT = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
 }
 
+
+
 sub data_disconnect{
 	$DBH->disconnect;
 }

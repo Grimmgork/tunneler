@@ -7,6 +7,13 @@ use List::Util 'first';
 
 require './data.pl';
 
+
+# ~ CONFIGURATION:
+use constant PING		=> "8.8.8.8";
+use constant FILE_DB	=> "gopherspace.db";
+use constant FILE_STAT	=> "status.txt";
+
+
 struct Host => {
 	name => '$',
 	port => '$',
@@ -46,9 +53,8 @@ struct PathNode => {
 #  }
 #  exit();
 
-my $PING = "8.8.8.8";
 print "INDEXING ...\n";
-data_connect("gopherspace.db");
+data_connect(FILE_DB);
 print "DONE!\n";
 
 # data_set_endpoint_status(1, "0");
@@ -172,10 +178,28 @@ sub traverse_host{
 		my $err = traverse_gopher_page($host, get_full_endpoint_path($node));
 		my $id = $node->dbid;
 		data_set_endpoint_status($node->dbid, 1 + $err);
+		report_status($host);
 	}
 
 	data_set_host_status($host->dbid, 1);
 	return $host;
+}
+
+sub report_status{
+	my ($host) = @_;
+	my $hostname = $host->name;
+	my $port = $host->port;
+	my $unvisited = @{$host->unvisited};
+	my $msg = <<EOF;
+# TUNNELER STATUS:
+host: $hostname
+port: $port
+unvisited: $unvisited
+EOF
+	my $h;
+	open($h, '>', FILE_STAT) or die $!;
+	print $h $msg;
+	close($h);
 }
 
 sub prompt{
@@ -205,7 +229,7 @@ sub clean_path{
 sub has_internet_connection{
 	my $p = Net::Ping->new('tcp');
 	$p->port_number(443);
-	my $res = $p->ping($PING);
+	my $res = $p->ping(PING);
 	$p->close();
 	return $res;
 }
