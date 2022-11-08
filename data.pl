@@ -92,6 +92,7 @@ sub data_get_endpoints_where_status{
 sub data_get_endpoints_from_host{
 	my($hostid) = @_;
 	my $sth = $DBH->prepare("select * from endpoints where hostid=?");
+	#prompt($hostid);
 	$sth->execute($hostid);
 	return $sth->fetchall_arrayref();
 }
