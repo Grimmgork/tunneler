@@ -197,7 +197,7 @@ port: $port
 unvisited: $unvisited
 EOF
 	my $h;
-	open($h, '>', FILE_STAT) or die $!;
+	open($h, '>', FILE_STAT) or return;
 	print $h $msg;
 	close($h);
 }
