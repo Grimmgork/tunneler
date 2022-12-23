@@ -49,9 +49,22 @@ struct PathNode => {
 #  	}
 #  }
 #  exit();
+# my @l = request_gopher("gopher.floodgap.com", 70, "");
+# foreach(@l) {
+# 	my ($rowtype, $rowpath, $rowhost, $rowport) = $_ =~ /^([^i3\s])[^\t]*\t([^\t]*)\t([^\t]*)\t(\d*)/; # <- TODO ERROR HERE!!!
+# 	unless(defined $rowtype){
+# 		print "err, skipping line\n";
+# 	}
+# 	else{
+# 		print $_;
+# 	}
+# }
 
-# print clean_path("  kek/lel/kok/ ");
+
 # exit();
+
+#print clean_path("  kek///[]lel/kok/ ");
+#exit();
 
 print "INDEXING ...\n";
 data_connect(FILE_DB);
@@ -80,6 +93,7 @@ while(my ($id, $hostandport) = data_get_first_host_unvisited()) {
 }
 
 data_disconnect();
+print "no more hosts to visit!";
 1;
 
 sub split_host_port{
@@ -140,7 +154,7 @@ sub try_add_path_to_endpoints{
 sub get_full_endpoint_path{
 	#my ($node) = @_;
 	#bless $_[0], "PathNode";
-	# $_[0] => the node for wich the path shall be constructed
+	# $_[0] = the leaf node
 	unless(defined $_[0]->parent){
 		return $_[0]->name;
 	}
@@ -155,14 +169,15 @@ sub traverse_host{
 	# load all known endpoints for this host into cache
 	print "Loading known endpoints for ", $host->name, " ", $host->port, " ...\n";
 	my $rows = data_get_endpoints_from_host($host->dbid);
-	foreach my $row (@$rows){
-		my ($addet, $endpoint) = try_add_path_to_endpoints($host, @$row[2], split(/\//, clean_path(@$row[3])));
+	foreach(@$rows){ # TODO $row to $_
+		my ($addet, $endpoint) = try_add_path_to_endpoints($host, @$_[2], split(/\//, @$_[3]));
 		if(@$addet == 0){ # if its already in the cache
-			print "duplicate endpoint in database!\n";
+			print "duplicate endpoint in database:\n";
+			print @$_[3], "\n";
 			next;
 		}
-		$endpoint->dbid(@$row[0]);
-		if(@$row[4] == 0 && @$row[2] == 1){ # if unvisited and is a gopher page
+		$endpoint->dbid(@$_[0]);
+		if(@$_[4] == 0 && @$_[2] == 1){ # if unvisited and is a gopher page
 			push @{$host->unvisited}, $endpoint; # add to unvisited
 		}
 	}
@@ -201,7 +216,7 @@ sub report_status{
 # TUNNELER STATUS:
 host: $hostname
 port: $port
-unvisited: $unvisited
+stack: $unvisited
 EOF
 	my $h;
 	open($h, '>', FILE_STAT) or return;
@@ -264,14 +279,16 @@ sub traverse_gopher_page{
 
 	# iterate rows
 	foreach(@rows) {
+		# print "processing line ...!\n";
+		# $_ holds the text of the current row
 		last if($_ eq "."); # end of gopher page
 
-		my ($rowtype, $rowinfo, $rowpath, $rowhost, $rowport) = $_ =~ m/^([^i3])([^\t]*)?\t?([^\t]*)?\t?([^\t]*)?\t?([^\t]\d*)?/;
-		unless(defined $rowtype){ # rowtype i and 3 and invalid rows are ignored
+		my ($rowtype, $rowpath, $rowhost, $rowport) = $_ =~ /^([^i3\s])[^\t]*\t([^\t]*)\t([^\t]*)\t(\d+)/; # <- TODO ERROR HERE!!!
+		unless(defined $rowtype){
 			next;
 		}
 
-		if(my ($url) = $rowpath =~ m/^UR[LI]:(.*)/gi)
+		if(my ($url) = $rowpath =~ m/UR[LI]:(.+)/gi)
 		{ # extract a full url reference like: URL:http://example.com
 			my($protocol, $hostname) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
 			if(defined $protocol){
@@ -280,26 +297,19 @@ sub traverse_gopher_page{
 			}
 			next;
 		}
-
 		$rowpath = clean_path($rowpath);
+
 		$rowhost = trim(lc $rowhost); # lowercase and trim the domain name
-
-		# exclude invalid host names
-		if($rowhost =~ /[^a-z0-9-\.]/i){
-			next;
-		}
-
-		# exclude *.onion and ftp.* domains
-		if($rowhost =~ /(^ftp\.|\.onion$)/gi){
+		# exclude invalid host names including ftp.* and *.onion names
+		if($rowhost =~ /[^a-z0-9-\.]|ftp\.|\.onion/i){
 			next;
 		}
 
 		if($rowhost eq ""){
 			$rowhost = $host->name;
-		}
-
-		if($rowport eq ""){
-			$rowport = $host->port;
+			if($rowport eq ""){
+				$rowport = $host->port;
+			}
 		}
 
 		if(($rowhost eq $host->name) && ($rowport eq $host->port))
