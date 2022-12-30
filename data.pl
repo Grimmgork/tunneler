@@ -28,8 +28,6 @@ sub data_connect{
 	$DB_PREP_ADD_ENDPOINT = $DBH->prepare("insert into endpoints (hostid, type, path, status) VALUES(?, ?, ?, ?)");
 }
 
-
-
 sub data_disconnect{
 	$DBH->disconnect;
 }
@@ -62,10 +60,27 @@ sub data_get_first_host_unvisited{
 	return $sth->fetchrow_array;
 }
 
+sub data_get_host_from_id{
+	my ($id) = @_;
+	my $sth = $DBH->prepare("select host from hosts where id=? LIMIT 1");
+	$sth->execute($id);
+	return $sth->fetchrow_array;
+}
+
 sub data_set_host_status{
 	my($id, $status) = @_;
 	my $sth = $DBH->prepare("update hosts set status=? where id=?");
 	$sth->execute($status, $id);
+}
+
+sub data_get_all_unvisited_hostids{
+	my $sth = $DBH->prepare("select id from hosts where status=0");
+	$sth->execute();
+	my @res;
+	while(my $id = $sth->fetchrow()){
+   		push @res, $id;
+	}
+	return @res;
 }
 
 

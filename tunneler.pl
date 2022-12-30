@@ -4,14 +4,19 @@ use IO::Socket::INET;
 use IO::Select;
 use Net::Ping;
 use List::Util 'first';
+use threads;
+use Win32::Pipe;
 
 require './data.pl';
+require './worker.pl';
 
 
 # ~ CONFIGURATION:
 use constant PING		=> "8.8.8.8";
 use constant FILE_DB	=> "gopherspace.db";
 use constant FILE_STAT	=> "status.txt";
+use constant MAX_DEPTH	=> 4;
+use constant MAX_WORKERS	=> 10;
 
 
 struct Host => {
@@ -29,6 +34,25 @@ struct PathNode => {
 	childs => '@',
 	dbid => '$'
 };
+
+struct WorkRequest => {
+	host => '$',
+	node => '$',
+	thr => '$'
+};
+
+# my $thr = threads->create('request_worker', "gopher.floodgap.com", 70, "");
+# my $res = $thr->join();
+
+# my ($status, $paths, $references) = @$res;
+# print "status: $status\n";
+# foreach(@$paths){
+# 	print "$_\n";
+# }
+# foreach(@$references){
+# 	print "$_\n";
+# }
+# exit();
 
 #   my $host = Host->new();
 #   $host->name("sdf.org");
@@ -49,20 +73,6 @@ struct PathNode => {
 #  	}
 #  }
 #  exit();
-# my @l = request_gopher("gopher.floodgap.com", 70, "");
-# foreach(@l) {
-# 	my ($rowtype, $rowpath, $rowhost, $rowport) = $_ =~ /^([^i3\s])[^\t]*\t([^\t]*)\t([^\t]*)\t(\d*)/; # <- TODO ERROR HERE!!!
-# 	unless(defined $rowtype){
-# 		print "err, skipping line\n";
-# 	}
-# 	else{
-# 		print $_;
-# 	}
-# }
-
-
-# exit();
-
 #print clean_path("  kek///[]lel/kok/ ");
 #exit();
 
@@ -70,31 +80,139 @@ print "INDEXING ...\n";
 data_connect(FILE_DB);
 print "DONE!\n";
 
-# data_set_endpoint_status(1, "0");
-
-# prompt user for a host if no unvisited host is in the database
 unless(data_get_first_host_unvisited()){
-	my $inpt = defined $ARGV[0] ? $ARGV[0] : prompt("host:port?");
-	my ($host, $port) = split_host_port($inpt);
+	my ($host, $port) = split_host_port(prompt("host:port?"));
+	$port = 70 unless defined $port;
 	data_register_new_host($host, $port);
 }
 
-# main loop
-while(my ($id, $hostandport) = data_get_first_host_unvisited()) {
-	my ($hostname, $port) = split_host_port($hostandport);
-	print "### START HOST: id:$id $hostname:$port ###\n";
-	# init picked host
-	my $host=Host->new();
-	$host->name($hostname);
-	$host->port($port);
-	$host->dbid($id);
+my %requests; # map between hostid and request
+my %hosts; # map hostid to host object
 
-	traverse_host($host);
+# main loop
+while(1){
+	# load hosts
+	my $left = MAX_WORKERS - scalar keys %requests;
+	if($left > 0){
+		my @hostids = get_other_hostids_not_finished($left, keys %requests);
+		foreach(@hostids){
+			$requests{$_} = undef;
+			$hosts{$_} = load_host_from_database($_);
+			print "host id:$_ loadet!\n";
+		}
+	}
+
+	my @done; # list of finished requests
+
+	# find finished/empty requests and start new ones
+	foreach(keys %requests){
+		my $res = $requests{$_};
+		if(defined $res){
+			next if $res->thr->is_running; # skip if its still running
+			push @done, $res; # add finished request to the 'done' list
+		}
+
+		$requests{$_} = undef;
+		# try start a new request
+		my $host = $hosts{$_};
+		my $node = shift(@{$host->unvisited}); # pick next endpoint
+		if($node){
+			# generate a new request for host
+			my $path = get_full_endpoint_path($node);
+			my $req = WorkRequest->new();
+			$req->host($host);
+			$req->node($node);
+			$req->thr(threads->create('request_worker', $host->name, $host->port, $path));
+			$requests{$_} = $req;
+			print "started a new request: $path\n";
+		}
+		else{
+			# no more endpoints to visit
+			unless(defined $res){# if there is no response to digest 
+				# host is fully discovered
+				data_set_host_status($host->dbid, 1);
+				# remove host
+				delete $requests{$host->dbid};
+				delete $hosts{$host->dbid};
+			}
+		}
+	}
+
+	# work on results
+	foreach(@done){
+		my $res = $_->thr->join();
+		my ($status, $paths, $refs) = @$res; # get result
+		print "$status\n";
+		digest_discoveries($_->host, $paths, $refs) unless $status > 0;
+		data_set_endpoint_status($_->node->dbid, 1 + $status);
+	}
+
+	# prompt("iteration ...");
 }
 
 data_disconnect();
 print "no more hosts to visit!";
 1;
+
+sub remove_first_from_array{
+	my ($obj, @arr) = @_;
+	foreach my $index (0 .. $#arr){
+		if($arr[$index] == $obj){
+			delete $arr[$index];
+			last;
+		}
+	}
+	return @arr;
+}
+
+sub contains{
+	my ($obj, @arr) = @_;
+	foreach(@arr){
+		return 1 if $_ == $obj; 
+	}
+	return 0;
+}
+
+sub digest_discoveries{
+	my ($host, $paths, $refs) = @_;
+
+	foreach(@$paths){
+		my ($type, $path) = $_ =~ /^(.)(.*)$/;
+		my ($addet, $ep) = try_add_path_to_endpoints($host, $type, split(/\//, $path));
+		foreach my $endpoint (@$addet){
+			if($endpoint->gophertype eq "1"){ # if its a gopherpage, check it out later
+				push(@{$host->unvisited}, $endpoint);
+			}
+			$endpoint->dbid(data_add_endpoint($host->dbid, $type, get_full_endpoint_path($endpoint), 0));
+			print "$type $path\n";
+		}
+	}
+
+	foreach(@$refs){
+		if(my ($url) = $_ =~ /^URL:(.+)/i){
+			data_increment_reference($host->name, $host->port, "URL", $url);
+			print " ~ URL: $url\n";
+			next;
+		}
+		my ($hostname, $port) = split(/:/, $_, 2);
+		if(defined try_register_host($hostname, $port)){
+			print " * DICOVERED: $hostname:$port\n";
+		}
+		data_increment_reference($host->name, $host->port, $hostname, $port);
+		print " ~ REF: $hostname:$port\n";
+	}
+}
+
+sub get_other_hostids_not_finished{
+	my ($n, @blacklist) = @_;
+	my @ids = data_get_all_unvisited_hostids();
+	my @res;
+	foreach(@ids){
+		push @res, $_ unless contains($_, @blacklist);
+		last if scalar @res >= $n;
+	}
+	return @res;
+}
 
 sub split_host_port{
 	my $str = shift @_;
@@ -113,6 +231,11 @@ sub try_add_path_to_endpoints{
 	my ($host, $type, @segments) = @_;
 	my $current = $host->root;
 	my @newendpoints = ();
+
+	if(scalar(@segments) > MAX_DEPTH){
+		my @kek;
+		return (\@kek, undef);
+	}
 
 	if(not defined $current){
 		$current = PathNode->new();
@@ -152,8 +275,6 @@ sub try_add_path_to_endpoints{
 }
 
 sub get_full_endpoint_path{
-	#my ($node) = @_;
-	#bless $_[0], "PathNode";
 	# $_[0] = the leaf node
 	unless(defined $_[0]->parent){
 		return $_[0]->name;
@@ -161,6 +282,41 @@ sub get_full_endpoint_path{
 	my $name = $_[0]->name;
 	my $path = get_full_endpoint_path($_[0]->parent);
 	return "$path/$name";
+}
+
+sub load_host_from_database{
+	my ($hostid) = @_;
+	my ($hostname, $port) = split_host_port(data_get_host_from_id($hostid));
+
+	my $host=Host->new();
+	$host->name($hostname);
+	$host->port($port);
+	$host->dbid($hostid);
+
+	# load all known endpoints for this host into cache
+	print "Loading known endpoints for ", $host->name, " ", $host->port, " ...\n";
+	my $rows = data_get_endpoints_from_host($host->dbid);
+	foreach(@$rows){ # TODO $row to $_
+		my ($addet, $endpoint) = try_add_path_to_endpoints($host, @$_[2], split(/\//, @$_[3]));
+		if(@$addet == 0){ # if its already in the cache
+			print "duplicate endpoint in database or too many segments:\n";
+			print @$_[3], "\n";
+			next;
+		}
+		$endpoint->dbid(@$_[0]);
+		if(@$_[4] == 0 && @$_[2] == 1){ # if unvisited and is a gopher page
+			push @{$host->unvisited}, $endpoint; # add to unvisited
+		}
+	}
+	print "Done!\n";
+
+	# check if the root is already in, if not add it. 
+	my ($addet, $root) = try_add_path_to_endpoints($host, "1", split(/\//, ""));
+	if(@$addet > 0){
+		push @{$host->unvisited}, $root;
+	}
+
+	return $host;
 }
 
 sub traverse_host{
@@ -172,7 +328,7 @@ sub traverse_host{
 	foreach(@$rows){ # TODO $row to $_
 		my ($addet, $endpoint) = try_add_path_to_endpoints($host, @$_[2], split(/\//, @$_[3]));
 		if(@$addet == 0){ # if its already in the cache
-			print "duplicate endpoint in database:\n";
+			print "duplicate endpoint in database or too many segments:\n";
 			print @$_[3], "\n";
 			next;
 		}
@@ -196,6 +352,10 @@ sub traverse_host{
 		my $id = $node->dbid;
 		data_set_endpoint_status($node->dbid, 1 + $err);
 		
+		unless(FILE_STAT){
+			next;
+		}
+
 		# report after 5 seconds
 		if(time()-$lastreport > 5){
 			report_status($host);
@@ -212,14 +372,14 @@ sub report_status{
 	my $hostname = $host->name;
 	my $port = $host->port;
 	my $unvisited = @{$host->unvisited};
+
 	my $msg = <<EOF;
 # TUNNELER STATUS:
 host: $hostname
 port: $port
 stack: $unvisited
 EOF
-	my $h;
-	open($h, '>', FILE_STAT) or return;
+	open(my $h, '>', FILE_STAT) or return;
 	print $h $msg;
 	close($h);
 }
@@ -273,7 +433,7 @@ sub traverse_gopher_page{
 	eval{
 		@rows = request_gopher($host->name, $host->port, $path);
 	};
-	if ($@) {
+	if ($@ =~ /^[13]/) {
 		return 3; # external error
 	}
 
@@ -336,31 +496,4 @@ sub traverse_gopher_page{
 	}
 
 	return 0;
-}
-
-sub request_gopher{
-	my($hostname, $port, $path) = @_;
-
-	my $socket = new IO::Socket::INET (
-    		PeerHost => $hostname,
-    		PeerPort => $port,
-    		Proto => 'tcp',
-		Timeout => 10
-	);
-
-	unless(defined $socket){
-		die "CONNECTION ERROR!";
-	}
-
-	$socket->send("$path\n");
-	
-	my $selector = new IO::Select();
-	$selector->add($socket);
-
-	unless(defined $selector->can_read(5)){
-		close($socket);
-		die "TIMEOUT ERROR!";
-	}
-
-	return <$socket>;
 }
