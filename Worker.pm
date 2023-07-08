@@ -1,15 +1,13 @@
 package Worker;
 
 use strict;
-use IO::Socket::INET;
-use IO::Socket::UNIX qw( SOCK_STREAM SOMAXCONN );
-
 use Time::HiRes qw(usleep);
 
 sub new {
 	my $class = shift;
 	my $self = bless {
-		id => shift,
+		reader  => shift,
+		writer  => shift,
 		timeout => shift || 5
 	}, $class;
 }
@@ -17,16 +15,8 @@ sub new {
 sub run {
 	my $self = shift;
 
-	unlink '.\worker_1';
-	my $server = IO::Socket::UNIX->new(
-    		Type => SOCK_STREAM(),
-    		Local => '.\worker_1',
-    		Listen => 1,
-	) || die "could not create server! \n";
-
 	my $refs;
 	my $paths;
-	my $client = $server->accept();
 	while(1) {
 		my $cmd = <$client>;
 		chomp($cmd);

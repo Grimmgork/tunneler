@@ -49,41 +49,58 @@ unless($DATA->get_first_host_unvisited()){
 	$DATA->register_new_host($host, $port);
 }
 
-# start workers
-my @worker_sockets;
-foreach(1..CONFIG->{no_workers}){
-	my $pid = fork();
-	die if not defined $pid;
-	if (not $pid) {
-		my $worker = Worker->new($_);
-		$worker->run();
+# start workers and lay pipes ||=||
+pipe(my $preader, my $cwriter) || die "pipe failed: $!";
+$cwriter->autoflush(1);
+my @pwriters;
+for(1..CONFIG->{no_workers}){
+	pipe(my $creader, my $pwriter) || die "pipe failed: $!";
+	$pwriter->autoflush(1);
+	push @pwriters, $pwriter;
+
+	my $pid = fork(); # - fork
+	unless($pid) { # child
+		close $pwriter;
+		close $preader;
+		worker($creader, $cwriter);
+		close $creader;
+		close $cwriter;
 		print "worker shutdown!\n";
-		exit 0;
+		exit(0); # - fork end
 	}
-	print "WORKER: pid $pid\n";
 }
-
-my $socket = IO::Socket::UNIX->new(
-     Type => SOCK_STREAM(),
-     Peer => '.\socket'
-);
-
-$socket->send("start\tsdf.org\t70\t\n");
-
-my $res = get_line($socket, 20);
-if(my ($code) = $res =~ /exit\t(\d)/){
-	print "$code\n";
+close $creader;
+close $cwriter;
+print "main started!\n";
+main($preader, \@pwriters);
+close $preader;
+foreach(@pwriters){
+	close $_;
 }
+print "main shutdown\n";
 
-$socket->send("get\n");
-wait_for_data($socket, 5);
-while(<$socket>){
-	print "$_";
-	last if $_ eq "\n";
-}
-
-$socket->send("end\n");
 exit 0;
+
+sub main {
+	my ($reader, $writers) = @_;
+
+	print $writers->[0] "start	sdf.org	70\n";
+	while(<$reader>){
+		print $_;
+	}
+}
+
+sub worker {
+	my ($reader, $writer) = @_;
+	while(<$reader>){
+		if($_ eq "start\n"){
+			for(1..10){
+				print $writer "test\n";
+			}
+			close $writer;
+		}
+	}
+}
 
 sub get_line {
 	my ($socket, $timeout) = @_;
