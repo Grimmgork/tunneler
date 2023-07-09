@@ -14,32 +14,29 @@ sub new {
 
 sub run {
 	my $self = shift;
+	my $reader = $self->{reader};
+	my $writer = $self->{writer};
 
-	my $refs;
-	my $paths;
-	while(1) {
-		my $cmd = <$client>;
-		chomp($cmd);
-		next if $cmd eq "";
-		if($cmd eq "end") {
-			last;
-		}
-		if(my($hostname, $port, $path) = $cmd =~ /start\t([^\t]+)\t(\d+)\t([^\t]*)$/) {
-			(my $code, $refs, $paths) = request($self, $hostname, $port, $path);
-			$client->send("exit\t$code\n");
-		}
-		if($cmd eq "get") {
-			foreach(@$refs){ $client->send("1$_\n"); }
-			foreach(@$paths){ $client->send("0$_\n"); }
-			$client->send("\n");
+	while(<$reader>) {
+		print $_;
+		chomp($_);
+		next if $_ eq "";
+
+		# end command
+		# [id]e
+		last if $_ =~ /\d+e$/;
+
+		# start a request command
+		# [id]s[host]	[port]	[path]
+		if(my($id, $hostname, $port, $path) = $_ =~ /(\d+)s([^\t]+)\t(\d+)\t(.*)$/) {
+			my $code = request($self, $writer, $id, $hostname, $port, $path);
+			print $writer "$id"."e$code\n";
 		}
 	}
-
-	$server->close();
 }
 
 sub request {
-	my ($self, $hostname, $port, $path) = @_;
+	my ($self, $writer, $id, $hostname, $port, $path) = @_;
 	print "requesting $hostname $port $path\n";
 	# make request
 	my $socket = new IO::Socket::INET (
@@ -74,7 +71,7 @@ sub request {
 		{ # extract a full url reference like: URL:http://example.com
 			my($protocol, $host) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
 			if(defined $protocol){
-				push @refs, "URL:$protocol://$host";
+				print $writer $id . "rURL:$protocol://$host\n";
 			}
 			next;
 		}
@@ -92,16 +89,16 @@ sub request {
 		}
 
 		if(($rowhost eq $hostname) && ($rowport eq $port)) { # endpoint of current host
-			push @paths, "$rowtype$rowpath";
+			print $writer $id . "p$rowtype$rowpath\n";
 		}
 		else { # reference to foreign host
-			push @refs, "$rowhost:$rowport";
+			print $writer $id . "r$rowhost:$rowport\n";
 		}
 	}
 
 	# close tcp socket
 	close($socket);
-	return (0, \@refs, \@paths);
+	return 0;
 }
 
 sub clean_path{

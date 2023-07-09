@@ -50,11 +50,13 @@ unless($DATA->get_first_host_unvisited()){
 }
 
 # start workers and lay pipes ||=||
-pipe(my $preader, my $cwriter) || die "pipe failed: $!";
+my $preader, my $cwriter;
+pipe($preader, $cwriter) || die "pipe failed: $!";
 $cwriter->autoflush(1);
 my @pwriters;
 for(1..CONFIG->{no_workers}){
-	pipe(my $creader, my $pwriter) || die "pipe failed: $!";
+	my $pwriter, my $creader;
+	pipe($creader, $pwriter) || die "pipe failed: $!";
 	$pwriter->autoflush(1);
 	push @pwriters, $pwriter;
 
@@ -69,37 +71,37 @@ for(1..CONFIG->{no_workers}){
 		exit(0); # - fork end
 	}
 }
-close $creader;
+# close $creader;
 close $cwriter;
 print "main started!\n";
-main($preader, \@pwriters);
+main($preader, \@pwriters, $DATA);
 close $preader;
+print "main shutdown\n";
 foreach(@pwriters){
 	close $_;
 }
-print "main shutdown\n";
 
+$DATA->disconnect();
 exit 0;
+1;
 
 sub main {
-	my ($reader, $writers) = @_;
+	my ($reader, $writers, $data) = @_;
 
-	print $writers->[0] "start	sdf.org	70\n";
-	while(<$reader>){
+	my $writer = $writers->[0];
+	print $writer "123ssdf.org	70	\n";
+	while(<$reader>) {
 		print $_;
+		last if $_ =~ /123e0\n/;
 	}
+
+	print "no more hosts to visit!";
 }
 
 sub worker {
 	my ($reader, $writer) = @_;
-	while(<$reader>){
-		if($_ eq "start\n"){
-			for(1..10){
-				print $writer "test\n";
-			}
-			close $writer;
-		}
-	}
+	my $worker = Worker->new($reader, $writer, 5);
+	$worker->run();
 }
 
 sub get_line {
@@ -116,46 +118,6 @@ sub wait_for_data {
 	return undef unless defined $selector->can_read(shift);
 	return 1;
 }
-
-my $hostindex;
-my @hosts;
-my $host;
-# main loop
-while(1) {
-	# fill up hosts array
-	my $l = @hosts;
-	if($l < CONFIG->{no_hosts}){
-		# add host
-		my @hids = get_other_unvisited_hostids(CONFIG->{no_hosts} - $l, map { $_->dbid } @hosts);
-		foreach(@hids){
-			push @hosts, load_host_from_database($_);
-		}
-	}
-
-	foreach(@worker_sockets){
-		if(my $res = get_line($_, 0)){
-			if(my ($code) = $res =~ /exit\t(\d)/){
-				print "exit: $code\n";
-				if($code eq "0"){
-					$socket->send("get\n");
-					wait_for_data($socket, 5);
-					digest_response($host, $code, $socket); # TODO get host from response
-				}
-			}
-		}
-	}
-	# go to next host
-	
-	# start idle worker
-
-	# process respones
-
-	sleep(1);
-}
-
-$DATA->disconnect();
-print "no more hosts to visit!";
-1;
 
 sub remove_first_from_array {
 	my ($obj, @arr) = @_;
@@ -179,6 +141,7 @@ sub contains {
 sub digest_paths {
 	my $ref = shift;
 	my $paths;
+	my $host;
 	foreach(@$paths){
 		my ($type, $path) = $_ =~ /^(.)(.*)$/;
 		my ($addet, $ep) = try_add_path_to_endpoints($host, $type, split(/\//, $path));
@@ -194,6 +157,7 @@ sub digest_paths {
 
 sub digest_refs {
 	my $refs;
+	my $host;
 	foreach(@$refs){
 		if(my ($url) = $_ =~ /^URL:(.+)/i){
 			$DATA->increment_reference($host->name, $host->port, "URL", $url);
