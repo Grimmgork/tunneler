@@ -49,12 +49,13 @@ unless($DATA->get_first_host_unvisited()){
 	$DATA->register_new_host($host, $port);
 }
 
-# start workers and lay pipes ||=||
+# start workers and lay pipes ~ ~ ~
 my $preader, my $cwriter;
 pipe($preader, $cwriter) || die "pipe failed: $!";
 $cwriter->autoflush(1);
-my @pwriters;
-for(1..CONFIG->{no_workers}){
+my @pwriters; # pipes to all workers
+
+for(0..(CONFIG->{no_workers}-1)){
 	my $pwriter, my $creader;
 	pipe($creader, $pwriter) || die "pipe failed: $!";
 	$pwriter->autoflush(1);
@@ -64,17 +65,50 @@ for(1..CONFIG->{no_workers}){
 	unless($pid) { # child
 		close $pwriter;
 		close $preader;
-		worker($creader, $cwriter);
+		my $worker = Worker->new($_, $creader, $cwriter);
+		$worker->run();
 		close $creader;
 		close $cwriter;
 		print "worker shutdown!\n";
 		exit(0); # - fork end
 	}
 }
-# close $creader;
+
 close $cwriter;
 print "main started!\n";
-main($preader, \@pwriters, $DATA);
+
+while(<$preader>)
+{
+	chomp($_);
+	my $res = $_;
+	# init
+	if(my ($id) = $_ =~ /(\d+)i$/) {
+		# give worker a request
+	}
+	# end
+	elsif(my ($id, $error) = $_ =~ /(\d+)e(\d+)$/) {
+		# decrement pending requests for host
+	}
+	# path
+	elsif(my ($id, $type, $path) = $_ =~ /(\d+)p(.)(.+)/) {
+		# digest path
+	}
+	# reference
+	elsif(my ($id, $host, $port) = $_ =~ /(\d+)r(.+)/) {
+		# digest reference
+	}
+
+	# foreach finished host
+		# set host as finished in db
+		# remove host from list of hosts
+	# try fill up hosts
+
+	# foreach empty worker
+		# try add request
+}
+
+print "no more hosts to visit!\n";
+
 close $preader;
 print "main shutdown\n";
 foreach(@pwriters){
@@ -85,38 +119,22 @@ $DATA->disconnect();
 exit 0;
 1;
 
-sub main {
-	my ($reader, $writers, $data) = @_;
-
-	my $writer = $writers->[0];
-	print $writer "123ssdf.org	70	\n";
-	while(<$reader>) {
-		print $_;
-		last if $_ =~ /123e0\n/;
-	}
-
-	print "no more hosts to visit!";
-}
-
-sub worker {
-	my ($reader, $writer) = @_;
-	my $worker = Worker->new($reader, $writer, 5);
-	$worker->run();
-}
-
 sub get_line {
 	my ($socket, $timeout) = @_;
-	wait_for_data($socket, $timeout || 5);
+	wait_for_data($socket, $timeout);
 	my $res = <$socket>;
 	chomp $res;
 	return $res;
 }
 
 sub wait_for_data {
-	my $selector = new IO::Select();
-	$selector->add(shift);
-	return undef unless defined $selector->can_read(shift);
-	return 1;
+	my $s = IO::Select->new();
+	my $p = shift;
+	print <$p>;
+	$s->add($p);
+	my $res = $s->can_read();
+	print "$res\n";
+	return $res;
 }
 
 sub remove_first_from_array {

@@ -6,6 +6,7 @@ use Time::HiRes qw(usleep);
 sub new {
 	my $class = shift;
 	my $self = bless {
+		id	   => shift,
 		reader  => shift,
 		writer  => shift,
 		timeout => shift || 5
@@ -15,29 +16,37 @@ sub new {
 sub run {
 	my $self = shift;
 	my $reader = $self->{reader};
-	my $writer = $self->{writer};
+
+	my $id = $self->{id};
+	print "worker $id started!\n";
+	respond($self, "i"); # respond with "initialized"
 
 	while(<$reader>) {
-		print $_;
 		chomp($_);
 		next if $_ eq "";
 
 		# end command
-		# [id]e
-		last if $_ =~ /\d+e$/;
+		# e
+		last if $_ =~ /e$/;
 
 		# start a request command
-		# [id]s[host]	[port]	[path]
-		if(my($id, $hostname, $port, $path) = $_ =~ /(\d+)s([^\t]+)\t(\d+)\t(.*)$/) {
-			my $code = request($self, $writer, $id, $hostname, $port, $path);
-			print $writer "$id"."e$code\n";
+		# s[host] [port] [path]
+		if(my($hostname, $port, $path) = $_ =~ /s([^\t]+)\t(\d+)\t(.*)$/) {
+			my $code;
+			eval {
+				$code = request($self, $hostname, $port, $path);
+			};
+			if($@) {
+				$code = 5;
+			}
+			respond($self, "e", $code);
 		}
 	}
 }
 
 sub request {
-	my ($self, $writer, $id, $hostname, $port, $path) = @_;
-	print "requesting $hostname $port $path\n";
+	my ($self, $hostname, $port, $path) = @_;
+	# print "requesting $hostname $port $path\n";
 	# make request
 	my $socket = new IO::Socket::INET (
     		PeerHost => $hostname,
@@ -71,7 +80,8 @@ sub request {
 		{ # extract a full url reference like: URL:http://example.com
 			my($protocol, $host) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
 			if(defined $protocol){
-				print $writer $id . "rURL:$protocol://$host\n";
+				# print $writer $id . "rURL:$protocol://$host\n";
+				respond($self, "r", "URL:$protocol://$host");
 			}
 			next;
 		}
@@ -89,10 +99,12 @@ sub request {
 		}
 
 		if(($rowhost eq $hostname) && ($rowport eq $port)) { # endpoint of current host
-			print $writer $id . "p$rowtype$rowpath\n";
+			# print $writer $id . "p$rowtype$rowpath\n";
+			respond($self, "p", "$rowtype$rowpath");
 		}
 		else { # reference to foreign host
-			print $writer $id . "r$rowhost:$rowport\n";
+			# print $writer $id . "r$rowhost:$rowport\n";
+			respond($self, "r", "$rowhost:$rowport")
 		}
 	}
 
@@ -101,7 +113,13 @@ sub request {
 	return 0;
 }
 
-sub clean_path{
+sub respond {
+	my($self, $type, $payload) = @_;
+	my $writer = $self->{writer};
+	print $writer $self->{id} . "$type$payload\n";
+}
+
+sub clean_path {
 	my ($path) = @_;
 	$path =~ s/\\/\//g; #replace \ with /
 	$path =~ s/^[\s\/]+|[\/\s]+$//g; #trim right / and left + right withespaces
@@ -111,7 +129,7 @@ sub clean_path{
 	return "/$path";
 }
 
-sub trim{
+sub trim {
 	my($str) = @_;
 	$str =~ s/^\s+|\s+$//g;
 	return $str;
