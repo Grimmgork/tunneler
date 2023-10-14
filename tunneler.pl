@@ -5,7 +5,6 @@ use IO::Select;
 use Net::Ping;
 use List::Util 'first';
 use threads;
-use Win32::Pipe;
 
 use lib ".";
 
@@ -28,6 +27,7 @@ struct Host => {
 	dbid => '$',
 	unvisited => '@',
 	priority => '$',
+	work => '$'
 };
 
 struct PathNode => {
@@ -50,37 +50,24 @@ unless($DATA->get_first_host_unvisited()){
 }
 
 # start workers and lay pipes ~ ~ ~
-my $preader, my $cwriter;
-pipe($preader, $cwriter) || die "pipe failed: $!";
-$cwriter->autoflush(1);
-my @pwriters; # pipes to all workers
-
+my $reader, my $writer;
+pipe($reader, $writer) || die "pipe failed: $!";
+$writer->autoflush(1);
+my @workers;
 for(0..(CONFIG->{no_workers}-1)){
-	my $pwriter, my $creader;
-	pipe($creader, $pwriter) || die "pipe failed: $!";
-	$pwriter->autoflush(1);
-	push @pwriters, $pwriter;
-
-	my $pid = fork(); # - fork
-	unless($pid) { # child
-		close $pwriter;
-		close $preader;
-		my $worker = Worker->new($_, $creader, $cwriter);
-		$worker->run();
-		close $creader;
-		close $cwriter;
-		print "worker shutdown!\n";
-		exit(0); # - fork end
-	}
+	my $worker = Worker->new($_, \&work);
+	push @workers, $worker;
+	$worker->fork($writer);
 }
-
-close $cwriter;
+close $writer;
 print "main started!\n";
 
-while(<$preader>)
+while(<$reader>)
 {
 	chomp($_);
+	print "$_\n";
 	my $res = $_;
+
 	# init
 	if(my ($id) = $_ =~ /(\d+)i$/) {
 		# give worker a request
@@ -109,11 +96,8 @@ while(<$preader>)
 
 print "no more hosts to visit!\n";
 
-close $preader;
+close $reader;
 print "main shutdown\n";
-foreach(@pwriters){
-	close $_;
-}
 
 $DATA->disconnect();
 exit 0;
@@ -153,6 +137,76 @@ sub contains {
 	foreach(@arr){
 		return 1 if $_ == $obj; 
 	}
+	return 0;
+}
+
+sub work {
+	my ($worker, $payload) = @_;
+	my ($hostname, $port, $path) = $payload =~ /([^\t]+)\t(\d+)\t(.*)/;
+
+	# make request
+	my $socket = new IO::Socket::INET (
+    		PeerHost => $hostname,
+    		PeerPort => $port,
+    		Proto => 'tcp',
+		Timeout => 5
+	);
+
+	return 1 unless defined $socket;
+
+	$socket->send("$path\n");
+	
+	my $selector = new IO::Select();
+	$selector->add($socket);
+	unless(defined $selector->can_read(5)){
+		close($socket);
+		return 2;
+	}
+
+	my @refs;
+	my @paths;
+
+	# iterate rows
+	foreach(<$socket>) {
+		last if $_ eq "."; # end of gopher page
+
+		my ($rowtype, $rowpath, $rowhost, $rowport) = $_ =~ /^([^i3\s])[^\t]*\t([^\t]*)\t([^\t]*)\t(\d+)/;
+		next unless defined $rowtype;
+
+		if(my ($url) = $rowpath =~ m/UR[LI]:(.+)/gi)
+		{ # extract a full url reference like: URL:http://example.com
+			my($protocol, $host) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
+			if(defined $protocol){
+				# print $writer $id . "rURL:$protocol://$host\n";
+				$worker->respond($writer, "r", "URL:$protocol://$host");
+			}
+			next;
+		}
+		$rowpath = clean_path($rowpath);
+
+		$rowhost = trim(lc $rowhost); # lowercase and trim the domain name
+		# exclude invalid host names including ftp.* and *.onion names
+		next if $rowhost =~ /[^a-z0-9-\.]|ftp\.|\.onion/i;
+
+		if($rowhost eq ""){
+			$rowhost = $hostname;
+			if($rowport eq ""){
+				$rowport = $port;
+			}
+		}
+
+		if(($rowhost eq $hostname) && ($rowport eq $port)) { # endpoint of current host
+			# print $writer $id . "p$rowtype$rowpath\n";
+			$worker->respond($writer, "p", "$rowtype$rowpath");
+		}
+		else { # reference to foreign host
+			# print $writer $id . "r$rowhost:$rowport\n";
+			$worker->respond($writer, "r", "$rowhost:$rowport");
+		}
+	}
+
+	# close tcp socket
+	close($socket);
 	return 0;
 }
 
