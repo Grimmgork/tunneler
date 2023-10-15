@@ -27,7 +27,6 @@ struct Host => {
 	dbid => '$',
 	unvisited => '@',
 	priority => '$',
-	work => '$'
 };
 
 struct PathNode => {
@@ -36,6 +35,13 @@ struct PathNode => {
 	gophertype => '$',
 	childs => '@',
 	dbid => '$'
+};
+
+struct WorkSlot => {
+	worker  => '$',
+	id      => '$',
+	host    => '$',
+	pending => '$'
 };
 
 print "INDEXING ...\n";
@@ -56,8 +62,13 @@ $writer->autoflush(1);
 my @workers;
 for(0..(CONFIG->{no_workers}-1)){
 	my $worker = Worker->new($_, \&work);
-	push @workers, $worker;
 	$worker->fork($writer);
+
+	my $slot = WorkSlot->new();
+	$slot->id($worker->{id});
+	$slot->worker($worker);
+	
+	push @workers, $slot;
 }
 close $writer;
 print "main started!\n";
@@ -70,6 +81,9 @@ while(<$reader>)
 
 	# init
 	if(my ($id) = $_ =~ /(\d+)i$/) {
+		my $slot = find_workslot_by_id($id, @workers);
+		start_work_on_slot()
+
 		# give worker a request
 	}
 	# end
@@ -79,10 +93,14 @@ while(<$reader>)
 	# path
 	elsif(my ($id, $type, $path) = $_ =~ /(\d+)p(.)(.+)/) {
 		# digest path
+		my $slot = find_workslot_by_id($id, @workers);
+		digest_path($slot->host, $type, $path);
 	}
 	# reference
-	elsif(my ($id, $host, $port) = $_ =~ /(\d+)r(.+)/) {
+	elsif(my ($id, $ref) = $_ =~ /(\d+)r(.+)/) {
 		# digest reference
+		my $slot = find_workslot_by_id($id, @workers);
+		digest_ref($slot->host, $ref);
 	}
 
 	# foreach finished host
@@ -102,6 +120,20 @@ print "main shutdown\n";
 $DATA->disconnect();
 exit 0;
 1;
+
+sub find_workslot_by_id {
+	my ($id, @slots) = @_;
+	foreach(@slots){
+		if($_->id eq $id){
+			return $_;
+		}
+	}
+	return undef;
+}
+
+sub start_work_on_slot {
+	my ($slot, ) = @_;
+}
 
 sub get_line {
 	my ($socket, $timeout) = @_;
@@ -210,39 +242,31 @@ sub work {
 	return 0;
 }
 
-sub digest_paths {
-	my $ref = shift;
-	my $paths;
-	my $host;
-	foreach(@$paths){
-		my ($type, $path) = $_ =~ /^(.)(.*)$/;
-		my ($addet, $ep) = try_add_path_to_endpoints($host, $type, split(/\//, $path));
-		foreach my $endpoint (@$addet){
-			if($endpoint->gophertype eq "1"){ # if its a gopherpage, check it out later
-				push(@{$host->unvisited}, $endpoint);
-			}
-			$endpoint->dbid($DATA->add_endpoint($host->dbid, $type, get_full_endpoint_path($endpoint), 0));
-			print "$type $path\n";
+sub digest_path {
+	my ($host, $type, $path) = @_;
+	my ($addet, $ep) = try_add_path_to_endpoints($host, $type, split(/\//, $path));
+	foreach my $endpoint (@$addet){
+		if($endpoint->gophertype eq "1"){ # if its a gopherpage, check it out later
+			push(@{$host->unvisited}, $endpoint);
 		}
+		$endpoint->dbid($DATA->add_endpoint($host->dbid, $type, get_full_endpoint_path($endpoint), 0));
+		print "$type $path\n";
 	}
 }
 
-sub digest_refs {
-	my $refs;
-	my $host;
-	foreach(@$refs){
-		if(my ($url) = $_ =~ /^URL:(.+)/i){
-			$DATA->increment_reference($host->name, $host->port, "URL", $url);
-			print " ~ URL: $url\n";
-			next;
-		}
-		my ($hostname, $port) = split(/:/, $_, 2);
-		if(defined try_register_host($hostname, $port)){
-			print " * DICOVERED: $hostname:$port\n";
-		}
-		$DATA->increment_reference($host->name, $host->port, $hostname, $port);
-		print " ~ REF: $hostname:$port\n";
+sub digest_ref {
+	my ($host, $ref) = @_;
+	if(my ($url) = $_ =~ /^URL:(.+)/i){
+		$DATA->increment_reference($host->name, $host->port, "URL", $url);
+		print " ~ URL: $url\n";
+		next;
 	}
+	my ($hostname, $port) = split(/:/, $_, 2);
+	if(defined try_register_host($hostname, $port)){
+		print " * DICOVERED: $hostname:$port\n";
+	}
+	$DATA->increment_reference($host->name, $host->port, $hostname, $port);
+	print " ~ REF: $hostname:$port\n";
 }
 
 sub get_other_unvisited_hostids {
