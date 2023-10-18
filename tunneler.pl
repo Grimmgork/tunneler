@@ -38,10 +38,10 @@ struct PathNode => {
 };
 
 struct WorkSlot => {
-	worker  => '$',
-	id      => '$',
-	host    => '$',
-	pending => '$'
+	worker => '$',
+	id => '$',
+	host => '$', # if worker is working, the works target host is stored here
+	free => '$'
 };
 
 print "INDEXING ...\n";
@@ -73,45 +73,47 @@ for(0..(CONFIG->{no_workers}-1)){
 close $writer;
 print "main started!\n";
 
-while(<$reader>)
-{
-	chomp($_);
-	print "$_\n";
-	my $res = $_;
+_loop:
+# try fill up hosts
+# foreach free worker
+	# try add request
 
-	# init
-	if(my ($id) = $_ =~ /(\d+)i$/) {
-		my $slot = find_workslot_by_id($id, @workers);
-		start_work_on_slot()
-
-		# give worker a request
-	}
-	# end
-	elsif(my ($id, $error) = $_ =~ /(\d+)e(\d+)$/) {
-		# decrement pending requests for host
-	}
-	# path
-	elsif(my ($id, $type, $path) = $_ =~ /(\d+)p(.)(.+)/) {
-		# digest path
-		my $slot = find_workslot_by_id($id, @workers);
-		digest_path($slot->host, $type, $path);
-	}
-	# reference
-	elsif(my ($id, $ref) = $_ =~ /(\d+)r(.+)/) {
-		# digest reference
-		my $slot = find_workslot_by_id($id, @workers);
-		digest_ref($slot->host, $ref);
-	}
-
-	# foreach finished host
-		# set host as finished in db
-		# remove host from list of hosts
-	# try fill up hosts
-
-	# foreach empty worker
-		# try add request
+_readresponse:
+$_ = <$reader>;
+chomp($_);
+print "$_\n";
+# init
+if(my ($id) = $_ =~ /(\d+)i$/) {
+	my $slot = find_workslot_by_id($id, @workers);
+	$slot->free(1);
+	goto _readresponse;
+}
+# path
+elsif(my ($id, $type, $path) = $_ =~ /(\d+)p(.)(.+)/) {
+	# digest path
+	my $slot = find_workslot_by_id($id, @workers);
+	digest_path($slot->host, $type, $path);
+	goto _readresponse;
+}
+# reference
+elsif(my ($id, $ref) = $_ =~ /(\d+)r(.+)/) {
+	# digest reference
+	my $slot = find_workslot_by_id($id, @workers);
+	digest_ref($slot->host, $ref);
+	goto _readresponse;
+}
+# end
+elsif(my ($id, $error) = $_ =~ /(\d+)e(\d+)$/) {
+	my $slot = find_workslot_by_id($id, @workers);
+	$slot->free(1);
+	
 }
 
+# foreach finished host
+	# set host as finished in db
+	# remove host from list of hosts
+goto _loop;
+_done:
 print "no more hosts to visit!\n";
 
 close $reader;

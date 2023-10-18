@@ -10,8 +10,8 @@ sub new {
 	$writer->autoflush(1);
 
 	my $self = {
-		id	   => shift,
-		work    => shift,
+		id	  => shift,
+		work   => shift,
 		writer => $writer,
 		reader => $reader
 	};
