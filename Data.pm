@@ -101,7 +101,7 @@ sub add_endpoint {
 
 sub set_endpoint_status {
 	my($self, $id, $status) = @_;
-	my $sth = $self->{sbh}->prepare("update endpoints set status=? where id=?");
+	my $sth = $self->{dbh}->prepare("update endpoints set status=? where id=?");
 	$sth->execute($status, $id);
 }
 

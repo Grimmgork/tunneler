@@ -16,8 +16,9 @@ use constant CONFIG => {
 	ping			=> "8.8.8.8",
 	file_db		=> "gopherspace.db",
 	file_stat		=> "status.txt",
-	no_workers	=> 3,
-	no_hosts		=> 1
+	max_depth		=> 10,
+	no_workers	=> 5,
+	no_hosts		=> 5
 };
 
 struct Host => {
@@ -41,6 +42,7 @@ struct WorkSlot => {
 	worker => '$',
 	id => '$',
 	host => '$', # if worker is working, the works target host is stored here
+	node => '$', # if worker is working, the works path is stored here
 	free => '$'
 };
 
@@ -48,6 +50,9 @@ print "INDEXING ...\n";
 my $DATA = Data->new();
 $DATA->init(CONFIG->{file_db});
 print "DONE!\n";
+
+$DATA->set_host_status(1, 0);
+# exit 0;
 
 unless($DATA->get_first_host_unvisited()){
 	my ($host, $port) = split_host_port(prompt("host:port?"));
@@ -60,7 +65,7 @@ my $reader, my $writer;
 pipe($reader, $writer) || die "pipe failed: $!";
 $writer->autoflush(1);
 my @workers;
-for(0..(CONFIG->{no_workers}-1)){
+for(1..(CONFIG->{no_workers})) {
 	my $worker = Worker->new($_, \&work);
 	$worker->fork($writer);
 
@@ -73,47 +78,69 @@ for(0..(CONFIG->{no_workers}-1)){
 close $writer;
 print "main started!\n";
 
-_loop:
-# try fill up hosts
-# foreach free worker
-	# try add request
+my @hosts;
 
-_readresponse:
+_loop:
+
 $_ = <$reader>;
 chomp($_);
 print "$_\n";
+
 # init
-if(my ($id) = $_ =~ /(\d+)i$/) {
-	my $slot = find_workslot_by_id($id, @workers);
-	$slot->free(1);
-	goto _readresponse;
+if(my ($id) = $_ =~ /^(\d+)i$/) {
+	my ($slot) = where(sub { $id == (shift)->id }, @workers);
+	slot_free($slot);
 }
 # path
-elsif(my ($id, $type, $path) = $_ =~ /(\d+)p(.)(.+)/) {
+elsif(my ($id, $type, $path) = $_ =~ /^(\d+)p(.)(.+)/) {
 	# digest path
-	my $slot = find_workslot_by_id($id, @workers);
+	my ($slot) = where(sub { $id == (shift)->id }, @workers);
 	digest_path($slot->host, $type, $path);
-	goto _readresponse;
 }
 # reference
-elsif(my ($id, $ref) = $_ =~ /(\d+)r(.+)/) {
+elsif(my ($id, $ref) = $_ =~ /^(\d+)r(.+)/) {
 	# digest reference
-	my $slot = find_workslot_by_id($id, @workers);
+	my ($slot) = where(sub { $id == (shift)->id }, @workers);
 	digest_ref($slot->host, $ref);
-	goto _readresponse;
 }
 # end
-elsif(my ($id, $error) = $_ =~ /(\d+)e(\d+)$/) {
-	my $slot = find_workslot_by_id($id, @workers);
-	$slot->free(1);
-	
+elsif(my ($id, $error) = $_ =~ /^(\d+)e(\d+)$/) {
+	my ($slot) = where(sub { $id == (shift)->id }, @workers);
+	my $node = $slot->node;
+	$DATA->set_endpoint_status($node->dbid, (1 + $error));
+	slot_free($slot);
 }
 
 # foreach finished host
-	# set host as finished in db
-	# remove host from list of hosts
+foreach(@hosts) {
+	unless(scalar @{$_->unvisited}) { # TODO: if no unvisited paths present AND no work for this host is pending
+		$DATA->set_host_status($_->dbid, 1);
+		@hosts = where(sub { (shift) != $_; }, @hosts); # remove host from array
+	}
+}
+
+# try fill up hosts
+while((scalar @hosts) < CONFIG->{no_hosts}){
+	my $id = get_unvisited_hostid(take(sub { (shift)->dbid }, @hosts)); # get all loaded host-ids
+	last if not $id;
+	push @hosts, load_host_from_database($id);
+}
+
+
+# foreach free worker
+	# try add request for top most host
+	# rotate hosts
+
+foreach(where(sub { (shift)->free }, @workers)){
+	my $host = shift @hosts;
+	last unless $host;
+	my $node = shift(@{$host->unvisited});
+	slot_start_work($_, $host, $node) if $node;
+	push @hosts, $host;
+}
+
+# end if no work left and no work is running
 goto _loop;
-_done:
 print "no more hosts to visit!\n";
 
 close $reader;
@@ -123,18 +150,24 @@ $DATA->disconnect();
 exit 0;
 1;
 
-sub find_workslot_by_id {
-	my ($id, @slots) = @_;
-	foreach(@slots){
-		if($_->id eq $id){
-			return $_;
-		}
-	}
-	return undef;
+sub slot_start_work {
+	my ($slot, $host, $node) = @_;
+	$slot->host($host);
+	$slot->node($node);
+	$slot->free(0);
+
+	my $hostname = $host->name;
+	my $port = $host->port;
+	my $path = get_full_endpoint_path($node);
+	$slot->worker->work("$hostname\t$port\t$path");
 }
 
-sub start_work_on_slot {
-	my ($slot, ) = @_;
+sub slot_free {
+	my $slot = shift;
+	my $id = $slot->id;
+	$slot->host(undef);
+	$slot->node(undef);
+	$slot->free(1);
 }
 
 sub get_line {
@@ -155,23 +188,30 @@ sub wait_for_data {
 	return $res;
 }
 
-sub remove_first_from_array {
-	my ($obj, @arr) = @_;
-	foreach my $index (0 .. $#arr){
-		if($arr[$index] == $obj){
-			delete $arr[$index];
-			last;
-		}
-	}
-	return @arr;
-}
-
 sub contains {
 	my ($obj, @arr) = @_;
 	foreach(@arr){
 		return 1 if $_ == $obj; 
 	}
 	return 0;
+}
+
+sub where {
+	my $exp = shift;
+	my @res;
+	foreach(@_) {
+		push @res, $_ if $exp->($_);
+	}
+	return @res; 
+}
+
+sub take {
+	my $exp = shift;
+	my @res;
+	foreach(@_){
+		push @res, $exp->($_);
+	}
+	return @res;
 }
 
 sub work {
@@ -247,23 +287,23 @@ sub work {
 sub digest_path {
 	my ($host, $type, $path) = @_;
 	my ($addet, $ep) = try_add_path_to_endpoints($host, $type, split(/\//, $path));
-	foreach my $endpoint (@$addet){
-		if($endpoint->gophertype eq "1"){ # if its a gopherpage, check it out later
-			push(@{$host->unvisited}, $endpoint);
+	foreach(@$addet) {
+		if($_->gophertype eq "1"){ # if its a gopherpage, check it out later
+			push(@{$host->unvisited}, $_);
 		}
-		$endpoint->dbid($DATA->add_endpoint($host->dbid, $type, get_full_endpoint_path($endpoint), 0));
-		print "$type $path\n";
+		$_->dbid($DATA->add_endpoint($host->dbid, $type, get_full_endpoint_path($_), 0));
+		print "~ PATH: $type $path\n";
 	}
 }
 
 sub digest_ref {
 	my ($host, $ref) = @_;
-	if(my ($url) = $_ =~ /^URL:(.+)/i){
+	if(my ($url) = $ref =~ /^URL:(.+)/i){
 		$DATA->increment_reference($host->name, $host->port, "URL", $url);
 		print " ~ URL: $url\n";
-		next;
+		return;
 	}
-	my ($hostname, $port) = split(/:/, $_, 2);
+	my ($hostname, $port) = split(/:/, $ref, 2);
 	if(defined try_register_host($hostname, $port)){
 		print " * DICOVERED: $hostname:$port\n";
 	}
@@ -271,15 +311,12 @@ sub digest_ref {
 	print " ~ REF: $hostname:$port\n";
 }
 
-sub get_other_unvisited_hostids {
-	my ($n, @blacklist) = @_;
+sub get_unvisited_hostid {
 	my @ids = $DATA->get_all_unvisited_hostids();
-	my @res;
 	foreach(@ids){
-		push @res, $_ unless contains($_, @blacklist);
-		last if scalar @res >= $n;
+		return $_ if not contains($_, @_);
 	}
-	return @res;
+	return undef;
 }
 
 sub split_host_port {
@@ -300,10 +337,10 @@ sub try_add_path_to_endpoints {
 	my $current = $host->root;
 	my @newendpoints = ();
 
-	if(scalar(@segments) > CONFIG->{max_depth}){
-		my @kek;
-		return (\@kek, undef);
-	}
+	# if(scalar(@segments) > CONFIG->{max_depth}){
+	# 	my @kek;
+	# 	return (\@kek, undef);
+	# }
 
 	if(not defined $current){
 		$current = PathNode->new();
