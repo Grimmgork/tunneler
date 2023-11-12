@@ -20,23 +20,47 @@ sub new {
 	return $self;
 }
 
-sub done {
-	my $self = shift;
-	my $writer = $self->{writer};
-	print $writer "e\n";
-}
-
 sub work {
 	my $self = shift;
-	my $payload = shift;
-	
 	my $writer = $self->{writer};
-	print $writer "w$payload\n";
+	print $writer "w\n";
+	foreach(@_){
+		print $writer "$_\n";
+	}
 }
 
-sub respond {
-	my($self, $out, $type, $payload) = @_;
-	print $out $self->{id} . "$type$payload\n";
+sub _initialized {
+	my($self, $out) = @_;
+	my $id = $self->{id};
+	print $out "$id\n";
+	print $out "i\n";
+}
+
+sub _workdone {
+	my($self, $out, $code) = @_;
+	my $id = $self->{id};
+	print $out "$id\n";
+	print $out "e\n";
+	print $out "$code\n";
+}
+
+sub _exit {
+	my($self, $out) = @_;
+	my $id = $self->{id};
+	print $out "$id\n";
+	print $out "x\n";
+}
+
+# used by the "work" subroutine to respond data
+sub yield {
+	my($self) = @_;
+	my $out = $self->{writer};
+	my $id = $self->{id};
+	print $out "$id\n";
+	print $out "y\n";
+	foreach(@_){
+		print $out "$_\n";
+	}
 }
 
 sub fork {
@@ -57,34 +81,38 @@ sub thread {
 
 	my $id = $self->{id};
 	print "## worker $id started!\n";
-	respond($self, $out, "i"); # respond with "initialized"
+	_initialized($self, $out); # respond with "initialized"
 
 	my $reader = $self->{reader};
 	while(<$reader>) {
-		
 		chomp($_);
 		next if $_ eq "";
 
-		my ($cmd, $payload) = $_ =~ /([a-z])(.*)/;
 		# end command
-		if($cmd eq 'e') {
+		if($_ eq 'e') {
 			last;
 		}
 
 		# start work command
-		if($cmd eq 'w') {
+		if($_ eq 'w') {
+			my @args;
+			while(<$reader>) {
+				chomp $_;
+				last if $_ eq "";
+				push @args, $_;
+			}
 			my $code;
 			eval {
-				$code = $self->{work}->($self, $payload);
+				$code = $self->{work}->($self, @args);
 			}; if($@) {
 				$code = 99;
 			}
-			respond($self, $out, "e", $code);
+			_workdone($self, $out, $code);
 		}
 	}
 
 	print "## worker $id shutdown!\n";
-	respond($self, $out, "x", 0);
+	_exit($self, $out);
 
 	close $self->{reader};
 	close $self->{writer};

@@ -75,6 +75,7 @@ sub get_host_from_id {
 
 sub set_host_status {
 	my($self, $id, $status) = @_;
+	print "host: $id done: $status\n";
 	my $sth = $self->{dbh}->prepare("update hosts set status=? where id=?");
 	$sth->execute($status, $id);
 }
