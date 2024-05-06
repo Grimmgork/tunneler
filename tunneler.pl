@@ -9,15 +9,14 @@ use threads;
 
 use Data;
 use Worker;
-use Queue;
 
 # ~ CONFIG:
 use constant CONFIG => {
 	ping			=> "8.8.8.8",
-	file_db		=> "gopherspace.db",
+	file_db			=> "gopherspace.db",
 	file_stat		=> "status.txt",
 	max_depth		=> 10,
-	no_workers	=> 5,
+	no_workers		=> 5,
 	no_hosts		=> 5
 };
 

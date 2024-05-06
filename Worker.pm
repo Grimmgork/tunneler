@@ -2,91 +2,113 @@ package Worker;
 
 use strict;
 use Time::HiRes qw(usleep);
+use IO::Select;
+use Socket;
+use IO::Handle;
+use IO::Select;
 
 sub new {
 	my $class = shift;
-	my $writer, my $reader;
-	pipe($reader, $writer);
-	$writer->autoflush(1);
+	socketpair(my $child, my $parent, AF_UNIX, SOCK_STREAM, PF_UNSPEC) or die "socketpair: $!";
+	$child->autoflush(1);
+	$parent->autoflush(1);
 
 	my $self = {
-		id	  => shift,
 		work   => shift,
-		writer => $writer,
-		reader => $reader
+		child => $child,
+		parent => $parent,
+		pid => undef
 	};
 
 	bless $self, $class;
 	return $self;
 }
 
-sub work {
+sub has_response {
 	my $self = shift;
-	my $writer = $self->{writer};
-	print $writer "w\n";
+	my $select = IO::Select->new();
+	$select->add($self->{child});
+	return $select->can_read(0);
+}
+
+sub read_response {
+	my $self = shift;
+	my $child = $self->{child};
+	my @response;
+	my $type = <$child>;
+	push @response, $type; # type
+	my $length = <$child>+0; # length
+	for(1..$length) {
+		my $res = <$child>;
+		chomp $res;
+		push @response, $res;
+	}
+	return @response;
+}
+
+sub start_work {
+	my $self = shift;
+	my $child = $self->{child};
+	print $child "w\n";
+	my $length = @_;
+	print $child "$length\n";
 	foreach(@_){
-		print $writer "$_\n";
+		print $child "$_\n";
 	}
 }
 
-sub _initialized {
-	my($self, $out) = @_;
-	my $id = $self->{id};
-	print $out "$id\n";
-	print $out "i\n";
+sub dispose {
+	my $self = shift;
+	my $child = $self->{child};
+	my $parent = $self->{parent};
+	print $child "e\n";
+	
+	my $pid = $self->{pid};
+	if (defined $pid) {
+		waitpid($pid, 0);
+	}
+	close $parent;
+	close $child;
 }
 
-sub _workdone {
-	my($self, $out, $code) = @_;
-	my $id = $self->{id};
-	print $out "$id\n";
-	print $out "e\n";
-	print $out "$code\n";
-}
-
-sub _exit {
-	my($self, $out) = @_;
-	my $id = $self->{id};
-	print $out "$id\n";
-	print $out "x\n";
-}
-
-# used by the "work" subroutine to respond data
+# used by the "work" to respond data
 sub yield {
 	my($self) = @_;
-	my $out = $self->{writer};
-	my $id = $self->{id};
-	print $out "$id\n";
-	print $out "y\n";
+	my $parent = $self->{parent};
+	print $parent "y\n";
+	my $length = @_;
+	print $parent "$length\n";
 	foreach(@_){
-		print $out "$_\n";
+		print $parent "$_\n";
 	}
 }
 
 sub fork {
 	my $self = shift;
-	my $out = shift;
-
-	my $pid = fork(); # - fork
-	unless($pid) { # child
-		sleep(1);
-		close $self->{writer};
-		thread($self, $out);
+	my $pid = fork;
+	if ($pid == 0)
+	{
+		# child
+		close $self->{child};
+		print "## worker started!\n";
+		thread($self);
+		print "## worker shutdown!\n";
+		close $self->{parent};
 		exit(0); # - fork end
+	}
+	else
+	{
+		# parent
+		$self->{pid} = $pid;
+		close $self->{parent};
 	}
 }
 
 sub thread {
-	my ($self, $out) = @_;
-
-	my $id = $self->{id};
-	print "## worker $id started!\n";
-	_initialized($self, $out); # respond with "initialized"
-
-	my $reader = $self->{reader};
-	while(<$reader>) {
+	my $self = shift;
+	my $parent = $self->{parent};
+	while(<$parent>) {
 		chomp($_);
-		next if $_ eq "";
 
 		# end command
 		if($_ eq 'e') {
@@ -95,28 +117,33 @@ sub thread {
 
 		# start work command
 		if($_ eq 'w') {
+			# read args
 			my @args;
-			while(<$reader>) {
-				chomp $_;
-				last if $_ eq "";
+			my $length = <$parent>+0;
+			for(1..$length) {
+				my $arg = <$parent>;
+				chomp $arg;
 				push @args, $_;
 			}
+
+			# do work with gathered args and get error code
 			my $code;
 			eval {
 				$code = $self->{work}->($self, @args);
 			}; if($@) {
 				$code = 99;
 			}
-			_workdone($self, $out, $code);
+
+			# signal work done
+			print $parent "e\n";
+			print $parent "1\n";
+			print $parent "$code\n";
 		}
 	}
-
-	print "## worker $id shutdown!\n";
-	_exit($self, $out);
-
-	close $self->{reader};
-	close $self->{writer};
-	close $out;
+	
+	# signal exit
+	print $parent "x\n";
+	print $parent "0\n";
 }
 
 1;
