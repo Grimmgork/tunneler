@@ -8,25 +8,55 @@ use IO::Select;
 
 use lib ".";
 use Worker;
+use Dispatcher;
   # We say AF_UNIX because although *_LOCAL is the
   # POSIX 1003.1g form of the constant, many machines
   # still don't have it.
 
+# my $worker = Worker->new(\&work);
+# $worker->fork();
+# $worker->start_work();
+# $worker->start_work();
+# $worker->dispose();
 
 sub work {
 	my $w = shift;
 	sleep(1);
-	# print "hello from heavy work\n";
-	# $w->yield(1, 2 , 3);
+	print "hello from heavy work\n";
+	$w->yield(1, 2 , 3);
 	return 0;
 }
 
-my $worker = Worker->new(\&work);
-$worker->fork();
-$worker->start_work();
-$worker->start_work();
-$worker->dispose();
-  
+sub on_init {
+	my $self = shift;
+	$self->start_work();
+	print "init\n";
+	return 0;
+}
+
+sub on_work_yield {
+	print "yield @_\n";
+	return 0;
+}
+
+sub on_work_success {
+	print "success work\n";
+	return 0;
+}
+
+sub on_work_error {
+	print "error work\n";
+	return 0;
+}
+
+my $dispatcher = Dispatcher->new(1, \&work, 
+	\&on_init, 
+	\&on_work_yield, 
+	\&on_work_success, 
+	\&on_work_error
+);
+$dispatcher->loop();
+
 #   sub test {
 # 	my @test = [1, 2, 3];
 # 	return @test;

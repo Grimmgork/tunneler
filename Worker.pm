@@ -36,6 +36,7 @@ sub read_response {
 	my $child = $self->{child};
 	my @response;
 	my $type = <$child>;
+	chomp $type;
 	push @response, $type; # type
 	my $length = <$child>+0; # length
 	for(1..$length) {
@@ -73,7 +74,7 @@ sub dispose {
 
 # used by the "work" to respond data
 sub yield {
-	my($self) = @_;
+	my $self = shift;
 	my $parent = $self->{parent};
 	print $parent "y\n";
 	my $length = @_;
@@ -140,10 +141,6 @@ sub thread {
 			print $parent "$code\n";
 		}
 	}
-	
-	# signal exit
-	print $parent "x\n";
-	print $parent "0\n";
 }
 
 1;
