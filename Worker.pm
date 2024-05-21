@@ -86,22 +86,18 @@ sub thread {
 	my $self = shift;
 	my $parent = $self->{parent};
 	my @command;
-	while(@command = read_array($parent)) {
+	while (@command = read_array($parent)) {
 		my $type = shift @command;
 
 		# end command
-		if($type eq "e") {
+		if ($type eq "e") {
 			last;
 		}
 
 		# start work command
-		if($type eq "w") {
-			my $code;
-			eval {
-				$code = $self->{work}->($self, @command);
-			}; if($@) {
-				$code = 99; # exception occured
-			}
+		if ($type eq "w") {
+			my $code = eval { $self->{work}->($self, @command) };
+			$code = 99 if $@; # code 99 = exception occured!
 			write_array($parent, "e", $code); # signal the end to parent
 		}
 	}
@@ -111,7 +107,7 @@ sub write_array {
 	my $handle = shift;
 	my $length = @_;
 	write_raw($handle, "$length\n");
-	foreach(@_) {
+	foreach (@_) {
 		my $arg_length = length $_;
 		write_raw($handle, "$arg_length\n");
 		write_raw($handle, $_);
@@ -122,7 +118,7 @@ sub read_array {
 	my $handle = shift;
 	my @result;
 	my $n_of_args = read_raw_line($handle);
-	foreach(1..$n_of_args) {
+	foreach (1..$n_of_args) {
 		my $length = read_raw_line($handle);
 		push @result, read_raw($handle, $length);
 	}
@@ -133,7 +129,7 @@ sub read_raw_line {
 	my $handle = shift;
 	my $result = "";
 	my $char = "";
-	while($char ne "\n") {
+	while ($char ne "\n") {
 		$char = read_raw($handle, 1);
 		$result = $result . $char;
 	}
@@ -146,7 +142,7 @@ sub write_raw {
 	my $message = shift;
 	my $message_length = length $message;
 	my $written = 0;
-	while($written < $message_length) { 
+	while ($written < $message_length) { 
 		$written += syswrite($handle, $message, $message_length, $written);
 	}
 }
@@ -156,7 +152,7 @@ sub read_raw {
 	my $length = shift;
 	my $message;
 	my $read = 0;
-	while($read < $length) {
+	while ($read < $length) {
 		$read += sysread($handle, $message, $length, $read);
 	}
 	return $message;

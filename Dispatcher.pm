@@ -9,7 +9,7 @@ sub new {
 	my $work = shift;
 
 	my @workers;
-	for(1..$number_of_workers) {
+	for (1..$number_of_workers) {
 		push @workers, Worker->new($work);
 	}
 	
@@ -34,21 +34,19 @@ sub new {
 
 sub loop {
 	my $self = shift;
-
 	my @workers = @{$self->{workers}};
 
-	# prepare workers
 	foreach(@workers) {
 		$_->fork();
 	}
 
-	# run initialization
+	# handle init
 	my $exit = $self->{on_init}->($self);
 
-	while(1) {
+	while (1) {
 		last if $exit;
 
-		foreach(@workers) {
+		foreach (@workers) {
 			next if not $_->has_response();
 
 			my @res = $_->read_response();
@@ -57,23 +55,26 @@ sub loop {
 			# if worker responds a yield
 			if ($type eq "y") 
 			{
+				# handle yield
 				$exit = $self->{on_work_yield}->($self, @res);
 				last if $exit;
 			}
 
 			# if worker responds end
-			if ($type eq "e") 
+			if ($type eq "e")
 			{
 				push @{$self->{free_workers}}, $_; # mark worker as free
 				
 				my $code = shift(@res);
 				if ($code)
 				{
+					# handle error
 					$exit = $self->{on_work_error}->($self, $code);
 					last if $exit;
 				}
 				else
 				{
+					# handle success
 					$exit = $self->{on_work_success}->($self);
 					last if $exit;
 				}
@@ -83,8 +84,7 @@ sub loop {
 		sleep(1);
 	}
 	
-	# dispose workers
-	foreach(@workers) {
+	foreach (@workers) {
 		$_->dispose();
 	}
 }

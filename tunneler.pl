@@ -147,7 +147,6 @@ sub work {
 	my @refs;
 	my @paths;
 
-	# iterate rows
 	foreach (<$socket>) {
 		last if $_ eq "."; # end of gopher page
 
