@@ -33,36 +33,19 @@ sub has_response {
 
 sub read_response {
 	my $self = shift;
-	my $child = $self->{child};
-	my @response;
-	my $type = <$child>;
-	chomp $type;
-	push @response, $type; # type
-	my $length = <$child>+0; # length
-	for(1..$length) {
-		my $res = <$child>;
-		chomp $res;
-		push @response, $res;
-	}
-	return @response;
+	return read_array($self->{child});
 }
 
 sub start_work {
 	my $self = shift;
-	my $child = $self->{child};
-	print $child "w\n";
-	my $length = @_;
-	print $child "$length\n";
-	foreach(@_){
-		print $child "$_\n";
-	}
+	write_array($self->{child}, "w", @_);
 }
 
 sub dispose {
 	my $self = shift;
 	my $child = $self->{child};
 	my $parent = $self->{parent};
-	print $child "e\n";
+	write_array($child, "e");
 	
 	my $pid = $self->{pid};
 	if (defined $pid) {
@@ -75,13 +58,7 @@ sub dispose {
 # used by the "work" to respond data
 sub yield {
 	my $self = shift;
-	my $parent = $self->{parent};
-	print $parent "y\n";
-	my $length = @_;
-	print $parent "$length\n";
-	foreach(@_){
-		print $parent "$_\n";
-	}
+	write_array($self->{parent}, "y", @_);
 }
 
 sub fork {
@@ -108,39 +85,81 @@ sub fork {
 sub thread {
 	my $self = shift;
 	my $parent = $self->{parent};
-	while(<$parent>) {
-		chomp($_);
+	my @command;
+	while(@command = read_array($parent)) {
+		my $type = shift @command;
 
 		# end command
-		if($_ eq 'e') {
+		if($type eq "e") {
 			last;
 		}
 
 		# start work command
-		if($_ eq 'w') {
-			# read args
-			my @args;
-			my $length = <$parent>+0;
-			for(1..$length) {
-				my $arg = <$parent>;
-				chomp $arg;
-				push @args, $_;
-			}
-
-			# do work with gathered args and get error code
+		if($type eq "w") {
 			my $code;
 			eval {
-				$code = $self->{work}->($self, @args);
+				$code = $self->{work}->($self, @command);
 			}; if($@) {
-				$code = 99;
+				$code = 99; # exception occured
 			}
-
-			# signal work done
-			print $parent "e\n";
-			print $parent "1\n";
-			print $parent "$code\n";
+			write_array($parent, "e", $code); # signal the end to parent
 		}
 	}
+}
+
+sub write_array {
+	my $handle = shift;
+	my $length = @_;
+	write_raw($handle, "$length\n");
+	foreach(@_) {
+		my $arg_length = length $_;
+		write_raw($handle, "$arg_length\n");
+		write_raw($handle, $_);
+	}
+}
+
+sub read_array {
+	my $handle = shift;
+	my @result;
+	my $n_of_args = read_raw_line($handle);
+	foreach(1..$n_of_args) {
+		my $length = read_raw_line($handle);
+		push @result, read_raw($handle, $length);
+	}
+	return @result;
+}
+
+sub read_raw_line {
+	my $handle = shift;
+	my $result = "";
+	my $char = "";
+	while($char ne "\n") {
+		$char = read_raw($handle, 1);
+		$result = $result . $char;
+	}
+	return $result;
+}
+
+
+sub write_raw {
+	my $handle = shift;
+	my $message = shift;
+	my $message_length = length $message;
+	my $written = 0;
+	while($written < $message_length) { 
+		$written += syswrite($handle, $message, $message_length, $written);
+	}
+}
+
+sub read_raw {
+	my $handle = shift;
+	my $length = shift;
+	my $message;
+	my $read = 0;
+	while($read < $length) {
+		$read += sysread($handle, $message, $length, $read);
+	}
+	return $message;
 }
 
 1;

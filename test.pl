@@ -1,35 +1,23 @@
 #!/usr/bin/perl -w
   # pipe6 - bidirectional communication using socketpair
   #   "the best ones always go both ways"
+  
 use strict;
-use Socket;
-use IO::Handle;
-use IO::Select;
-
 use lib ".";
 use Worker;
 use Dispatcher;
-  # We say AF_UNIX because although *_LOCAL is the
-  # POSIX 1003.1g form of the constant, many machines
-  # still don't have it.
-
-# my $worker = Worker->new(\&work);
-# $worker->fork();
-# $worker->start_work();
-# $worker->start_work();
-# $worker->dispose();
 
 sub work {
-	my $w = shift;
+	my $worker = shift;
 	sleep(1);
 	print "hello from heavy work\n";
-	$w->yield(1, 2 , 3);
+	$worker->yield(1, 2 , 3);
 	return 0;
 }
 
 sub on_init {
-	my $self = shift;
-	$self->start_work();
+	my $dispatcher = shift;
+	$dispatcher->start_work();
 	print "init\n";
 	return 0;
 }
@@ -40,7 +28,9 @@ sub on_work_yield {
 }
 
 sub on_work_success {
+	my $dispatcher = shift;
 	print "success work\n";
+	$dispatcher->start_work();
 	return 0;
 }
 

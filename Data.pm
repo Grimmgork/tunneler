@@ -15,15 +15,15 @@ sub init {
 	my $db = DBI->connect("dbi:SQLite:dbname=$path","","", {PrintError => 1, foreign_keys => 1}) or die('database error: ' . DBI->errstr());
 
 	# enforce database schema
-	$db->do("create table if not exists hosts(id INTEGER PRIMARY KEY, host TEXT not null unique, status INT not null);");
+	$db->do("create table if not exists hosts(id INTEGER PRIMARY KEY, host TEXT not null, port INT not null, status INT not null);");
 	$db->do("create table if not exists endpoints(id INTEGER PRIMARY KEY, hostid INT, type CHAR(1), path TEXT, status INT not null, FOREIGN KEY(hostid) REFERENCES hosts(id));");
-	$db->do("create table if not exists refs(pair TEXT PRIMARY KEY, count INT not null);");
+	$db->do("create table if not exists refs(hostid_from INTEGER, hostid_to INTEGER, count INT not null);");
 
 	# indexing hosts
 	my $sth = $db->prepare("select * from hosts");
 	$sth->execute();
 	while(($id, $host, undef) = $sth->fetchrow()){
-   		$self->{host_ids}->{$host} = $id;
+   		$self->{known_hosts}->{$host} = $id;
 	}
 	
 	$self->{prepared} = {
@@ -39,31 +39,19 @@ sub disconnect {
 
 sub get_host_id {
 	my($self, $host, $port) = @_;
-	return $self->{host_ids}->{"$host:$port"};
+	return $self->{known_hosts}->{"$host:$port"};
 }
 
 # ### HOSTS:
 
-sub register_new_host {
+sub try_register_host {
 	my($self, $host, $port) = @_;
-	my $sth = $self->{dbh}->prepare("insert into hosts (host, status) values (?, ?);");
-	$sth->execute("$host:$port", 0);
+	return undef if defined get_host_id($self, $host, $port); # make sure host is not registered
+	my $sth = $self->{dbh}->prepare("insert into hosts (host, port, status) values (?, ?, ?);");
+	$sth->execute($host, $port, 0);
 	my $id = $self->{dbh}->sqlite_last_insert_rowid;
-   	$self->{host_ids}->{"$host:$port"} = $id;
+   	$self->{known_hosts}->{"$host:$port"} = $id;
 	return $id;
-}
-
-sub is_host_registered {
-	my($self, $host, $port) = @_;
-	return 1 if defined get_host_id($self, $host, $port);
-	return 0;
-}
-
-sub get_first_host_unvisited {
-	my $self = shift;
-	my $sth = $self->{dbh}->prepare("select id, host from hosts where status=0 LIMIT 1");
-	$sth->execute;
-	return $sth->fetchrow_array;
 }
 
 sub get_host_from_id {
@@ -80,10 +68,17 @@ sub set_host_status {
 	$sth->execute($status, $id);
 }
 
-sub get_all_unvisited_hostids {
+sub get_unvisited_hostids {
 	my $self = shift;
-	my $sth = $self->{dbh}->prepare("select id from hosts where status=0");
-	$sth->execute();
+	my $max = shift;
+
+	my @expressions;
+	foreach(@_) {
+		push @expressions, " and id <> ?";
+	}
+
+	my $sth = $self->{dbh}->prepare("select id from hosts where status=0" . join("", @expressions) . " LIMIT ?");
+	$sth->execute(@_, $max);
 	my @res;
 	while(my $id = $sth->fetchrow()){
    		push @res, $id;
@@ -107,9 +102,9 @@ sub set_endpoint_status {
 }
 
 sub get_endpoints_where_status {
-	my($self, $host, $port, $status) = @_;
+	my($self, $hostid, $status) = @_;
 	my $sth = $self->{dbh}->prepare("select * from endpoints where hostid=? and status=?");
-	$sth->execute(get_host_id($self, "$host:$port"), $status);
+	$sth->execute($hostid, $status);
 	return $sth->fetchall_arrayref();
 }
 
@@ -123,25 +118,9 @@ sub get_endpoints_from_host {
 
 # ### REFERENCES:
 
-sub refs_get_count {
-	my($self, $from_host, $from_port, $to_host, $to_port) = @_;
-	my $sth = $self->{dbh}->prepare("select * from refs where pair=? LIMIT 1");
-	$sth->execute("$from_host:$from_port=>$to_host:$to_port");
-	my(undef, $count) = $sth->fetchrow_array;
-	unless(defined $count){
-		return 0;
-	}
-	return $count;
-}
-
 sub increment_reference {
 	my($self, $from_host, $from_port, $to_host, $to_port) = @_;
-	my $count = refs_get_count($self, $from_host, $from_port, $to_host, $to_port);
-	unless($count){
-		$self->{dbh}->do("insert into refs (pair, count) values (?, ?)", undef, "$from_host:$from_port=>$to_host:$to_port", 1); # insert new row
-		return;
-	}
-	$self->{dbh}->do("update refs set count=? where pair=?", undef, $count+1, "$from_host:$from_port=>$to_host:$to_port");
+	$self->{dbh}->do("UPDATE refs SET count = count + 1 WHERE pair=?; IF changes() = 0 THEN INSERT INTO refs (pair, count) VALUES (?, ?) END;", undef, "$from_host:$from_port->$to_host:$to_port", "$from_host:$from_port->$to_host:$to_port", 1);
 }
 
 1;

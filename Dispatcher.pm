@@ -64,6 +64,8 @@ sub loop {
 			# if worker responds end
 			if ($type eq "e") 
 			{
+				push @{$self->{free_workers}}, $_; # mark worker as free
+				
 				my $code = shift(@res);
 				if ($code)
 				{
@@ -75,8 +77,6 @@ sub loop {
 					$exit = $self->{on_work_success}->($self);
 					last if $exit;
 				}
-
-				push @{$self->{free_workers}}, $_;
 			}
 		}
 
