@@ -330,14 +330,6 @@ EOF
 	close($h);
 }
 
-sub prompt {
-	my($message) = @_;
-	print "$message\n";
-	my $res = <STDIN>;
-	chomp $res;
-	return $res;
-}
-
 sub trim {
 	my($str) = @_;
 	$str =~ s/^\s+|\s+$//g;

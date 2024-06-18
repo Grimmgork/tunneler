@@ -1,7 +1,9 @@
 package Dispatcher;
 
-use Worker;
 use strict;
+use Worker;
+use Worker 'WORKER_EVENT_DONE';
+use Worker 'WORKER_EVENT_YIELD';
 
 sub new {
 	my $class = shift;
@@ -53,15 +55,15 @@ sub loop {
 			my $type = shift(@res);
 
 			# if worker responds a yield
-			if ($type eq "y") 
+			if ($type eq WORKER_EVENT_YIELD)
 			{
 				# handle yield
 				$exit = $self->{on_work_yield}->($self, @res);
 				last if $exit;
 			}
 
-			# if worker responds end
-			if ($type eq "e")
+			# if worker responds done
+			if ($type eq WORKER_EVENT_DONE)
 			{
 				push @{$self->{free_workers}}, $_; # mark worker as free
 				

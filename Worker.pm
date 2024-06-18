@@ -6,6 +6,15 @@ use IO::Select;
 use Socket;
 use IO::Handle;
 use IO::Select;
+use Exporter 'import';
+
+our @EXPORT_OK = ('WORKER_EVENT_YIELD', 'WORKER_EVENT_DONE');
+
+use constant WORKER_EVENT_YIELD => 1;
+use constant WORKER_EVENT_DONE => 2;
+
+use constant WORKER_CMD_START => 2;
+use constant WORKER_CMD_END => 1;
 
 sub new {
 	my $class = shift;
@@ -38,14 +47,14 @@ sub read_response {
 
 sub start_work {
 	my $self = shift;
-	write_array($self->{child}, "w", @_);
+	write_array($self->{child}, WORKER_CMD_START, @_);
 }
 
 sub dispose {
 	my $self = shift;
 	my $child = $self->{child};
 	my $parent = $self->{parent};
-	write_array($child, "e");
+	write_array($child, WORKER_CMD_END);
 	
 	my $pid = $self->{pid};
 	if (defined $pid) {
@@ -58,7 +67,7 @@ sub dispose {
 # used by the "work" to respond data
 sub yield {
 	my $self = shift;
-	write_array($self->{parent}, "y", @_);
+	write_array($self->{parent}, WORKER_EVENT_YIELD, @_);
 }
 
 sub fork {
@@ -90,15 +99,15 @@ sub thread {
 		my $type = shift @command;
 
 		# end command
-		if ($type eq "e") {
+		if ($type eq WORKER_CMD_END) {
 			last;
 		}
 
 		# start work command
-		if ($type eq "w") {
+		if ($type eq WORKER_CMD_START) {
 			my $code = eval { $self->{work}->($self, @command) };
 			$code = 99 if $@; # code 99 = exception occured!
-			write_array($parent, "e", $code); # signal the end to parent
+			write_array($parent, WORKER_EVENT_DONE, $code); # signal the end to parent
 		}
 	}
 }
