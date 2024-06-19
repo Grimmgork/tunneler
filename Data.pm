@@ -43,10 +43,13 @@ sub get_host_id {
 
 sub try_register_host {
 	my ($self, $host, $port) = @_;
-	return undef if defined get_host_id($self, $host, $port); # make sure host is not already registered
+	my $id = get_host_id($self, $host, $port); 
+	return $id if $id; # if host is already registered, return id from cache
+
+	# else create new database entry
 	my $sth = $self->{dbh}->prepare("insert into hosts (host, port, status) values (?, ?, ?);");
 	$sth->execute($host, $port, 0);
-	my $id = $self->{dbh}->sqlite_last_insert_rowid;
+	$id = $self->{dbh}->sqlite_last_insert_rowid;
    	$self->{known_hosts}->{"$host:$port"} = $id;
 	return $id;
 }

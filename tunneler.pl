@@ -46,27 +46,30 @@ if ($initial) {
 }
 
 my @hosts = ();
-
-# try load hosts
-while (scalar(@hosts) < CONFIG->{no_hosts})
-{
-	my @blacklist = map { $_->dbid } @hosts;
-	my @ids = $DATA->get_unvisited_hostids(1, @blacklist);
-	my $id = shift @ids;
-	last unless defined $id; # done, no more hosts to load in the database
-	my $host = load_host_from_database($id);
-	push @hosts, $host;
-}
-
-unless (scalar(@hosts)) {
-	print "no hosts to visit ...\n";
-	exit 0;
-}
-
-exit 0;
-
 sub on_init {
 	my $dispatcher = shift;
+
+	# load hosts
+	while (scalar(@hosts) < CONFIG->{no_hosts})
+	{
+		my @blacklist = map { $_->dbid } @hosts;
+		my @ids = $DATA->get_unvisited_hostids(1, @blacklist);
+		my $id = shift @ids;
+		last unless defined $id; # done, no more hosts to load in the database
+		my $host = load_host_from_database($id);
+		push @hosts, $host;
+	}
+
+	unless (scalar(@hosts)) {
+		print "no hosts to visit ...\n";
+		return 1;
+	}
+
+	# while worker is free start worker with work
+	while ($dispatcher->free_workers) {
+
+	}
+
 	return 0;
 }
 
@@ -75,7 +78,7 @@ sub on_work_yield {
 	# digest_ref
 	# digest_path
 	
-	# if new ref is found, try load host
+	# if new ref is found and space to load another host, try load host
 	# if worker is free, try start worker with new found path / root host node
 	return 0;
 }
@@ -92,8 +95,9 @@ sub on_work_success {
 
 sub on_work_error {
 	my $dispatcher = shift;
+	my $error = shift;
 	# work is done 
-	# mark path as done
+	# mark path as error
 	
 	# start worker if work is available
 	# if no work is available, end
@@ -111,14 +115,6 @@ $dispatcher->loop();
 
 $DATA->disconnect();
 exit 0;
-
-sub contains {
-	my ($obj, @arr) = @_;
-	foreach my $item (@arr){
-		return 1 if $item == $obj; 
-	}
-	return undef;
-}
 
 sub work {
 	my ($worker, $hostid, $hostname, $port, $path) = @_;
@@ -180,6 +176,7 @@ sub work {
 	return 0;
 }
 
+# a reference to local path on the same host
 sub digest_path {
 	my ($host, $type, $path) = @_;
 	my ($addet, $ep) = host_add_endpoint($host, $type, split(/\//, $path));
@@ -194,13 +191,14 @@ sub digest_path {
 
 # a reference to a foreign host, potentially unknown
 sub digest_ref {
-	my ($host, $ref) = @_;
-	my ($hostname, $port) = split(/:/, $ref, 2);
-	if (defined $DATA->try_register_host($hostname, $port)) {
-		print " * DICOVERED: $hostname:$port\n";
+	my ($host, $hostname, $port) = @_;
+
+	# TODO remove when ready
+	unless ($DATA->get_host_id($hostname, $port)) {
+		print "* DISCOVERED $hostname:$port\n";
 	}
-	$DATA->increment_reference($host->name, $host->port, $hostname, $port);
-	print " ~ REF: $hostname:$port\n";
+	my $id = $DATA->try_register_host($hostname, $port);
+	$DATA->increment_reference($host->dbid, $id);
 }
 
 sub split_host_port {
