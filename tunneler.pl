@@ -37,9 +37,7 @@ my $DATA = Data->new();
 $DATA->init(CONFIG->{file_db});
 print "DONE!\n";
 
-$DATA->increment_reference("asdf", 10, "asdff", 70);
-
-# grab initial seed
+# inject initial host
 my $initial = shift @ARGV;
 if ($initial) {
 	my ($host, $port) = split_host_port($initial);
@@ -123,7 +121,7 @@ sub contains {
 }
 
 sub work {
-	my ($worker, $hostname, $port, $path) = @_;
+	my ($worker, $hostid, $hostname, $port, $path) = @_;
 
 	# make request
 	my $socket = IO::Socket::INET->new(
@@ -144,30 +142,24 @@ sub work {
 		return 2;
 	}
 
-	my @refs;
-	my @paths;
-
 	foreach (<$socket>) {
 		last if $_ eq "."; # end of gopher page
 
 		my ($rowtype, $rowpath, $rowhost, $rowport) = $_ =~ /^([^i3\s])[^\t]*\t([^\t]*)\t([^\t]*)\t(\d+)/;
 		next unless defined $rowtype;
 
-		if (my ($url) = $rowpath =~ m/UR[LI]:(.+)/gi) { 
-			# extract a full url reference like: URL:http://example.com
-			my ($protocol, $host) = $url =~ m/^([a-z0-9]*):\/\/([^\/:]*)/gi;
-			if (defined $protocol) {
-				$worker->yield("r", "URL:$protocol://$host");
-			}
+		# try parse full url reference
+		if (my ($url) = $rowpath =~ m/UR[LI]:(.+)/gi) {
+			my ($protocol, $host, $port) = $url =~ m/^([a-z0-9]*):\/\/([a-zA-Z0-9.]+)(?::(\d+))?(?:\/.*)?$/gi;
+			$worker->yield("r", $hostid, $host, $port || 70) if $protocol eq "gopher" and $host ne $hostname;
 			next;
 		}
 
 		$rowpath = clean_path($rowpath);
 		$rowhost = trim(lc($rowhost)); # trim and lowercase
 
-		# exclude invalid host names including ftp.* and *.onion names
+		# skip unwanted host names like ftp.* and *.onion
 		next if $rowhost =~ /[^a-z0-9-\.]|ftp\.|\.onion/i;
-
 		unless ($rowhost) {
 			$rowhost = $hostname;
 			$rowport = $port unless $rowport;
@@ -175,11 +167,11 @@ sub work {
 
 		if (($rowhost eq $hostname) && ($rowport eq $port)) { 
 			# endpoint of current host
-			$worker->yield("p", $rowtype, $rowpath);
+			$worker->yield("p", $hostid, $rowtype, $rowpath);
 		}
-		else { 
+		else {
 			# reference to foreign host
-			$worker->yield("r", "$rowhost:$rowport");
+			$worker->yield("r", $hostid, $rowhost, $rowport);
 		}
 	}
 
@@ -200,13 +192,9 @@ sub digest_path {
 	}
 }
 
+# a reference to a foreign host, potentially unknown
 sub digest_ref {
 	my ($host, $ref) = @_;
-	if (my ($url) = $ref =~ /^URL:(.+)/i) {
-		$DATA->increment_reference($host->name, $host->port, "URL", $url);
-		print " ~ URL: $url\n";
-		return;
-	}
 	my ($hostname, $port) = split(/:/, $ref, 2);
 	if (defined $DATA->try_register_host($hostname, $port)) {
 		print " * DICOVERED: $hostname:$port\n";
@@ -311,23 +299,6 @@ sub load_host_from_database {
 	}
 
 	return $host;
-}
-
-sub report_status {
-	my ($host) = @_;
-	my $hostname = $host->name;
-	my $port = $host->port;
-	my $unvisited = @{$host->unvisited};
-
-	my $msg = <<EOF;
-# TUNNELER STATUS:
-host: $hostname
-port: $port
-stack: $unvisited
-EOF
-	open(my $h, '>', CONFIG->{file_stat}) or return;
-	print $h $msg;
-	close($h);
 }
 
 sub trim {

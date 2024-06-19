@@ -19,6 +19,7 @@ sub on_init {
 }
 
 sub on_work_yield {
+	my $dispatcher = shift;
 	print "yield @_\n";
 	return 0;
 }

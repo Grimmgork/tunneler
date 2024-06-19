@@ -10,7 +10,7 @@ sub new {
 sub init {
 	my ($self, $path) = @_;
 	die "already connected!" if $self->{dbh};
-	my $db = DBI->connect("dbi:SQLite:dbname=$path","","", { PrintError => 1, foreign_keys => 1 });
+	my $db = DBI->connect("dbi:SQLite:dbname=$path", "", "", { PrintError => 1, foreign_keys => 1 });
 
 	# enforce database schema
 	$db->do("create table if not exists hosts(id INTEGER PRIMARY KEY, host TEXT not null, port INT not null, status INT not null);");
@@ -18,10 +18,10 @@ sub init {
 	$db->do("create table if not exists refs(hostid_from INTEGER, hostid_to INTEGER, count INT not null);");
 
 	# indexing hosts
-	my $sth = $db->prepare("SELECT id, host FROM hosts;");
+	my $sth = $db->prepare("SELECT id, host, port FROM hosts;");
 	$sth->execute();
-	while (($id, $host) = $sth->fetchrow()) {
-   		$self->{known_hosts}->{$host} = $id;
+	while (($id, $host, $port) = $sth->fetchrow()) {
+   		$self->{known_hosts}->{"$host:$port"} = $id;
 	}
 	
 	$self->{prepared} = {
@@ -43,7 +43,7 @@ sub get_host_id {
 
 sub try_register_host {
 	my ($self, $host, $port) = @_;
-	return undef if defined get_host_id($self, $host, $port); # make sure host is not registered
+	return undef if defined get_host_id($self, $host, $port); # make sure host is not already registered
 	my $sth = $self->{dbh}->prepare("insert into hosts (host, port, status) values (?, ?, ?);");
 	$sth->execute($host, $port, 0);
 	my $id = $self->{dbh}->sqlite_last_insert_rowid;
@@ -53,7 +53,7 @@ sub try_register_host {
 
 sub get_host_from_id {
 	my ($self, $id) = @_;
-	my $sth = $self->{dbh}->prepare("select host from hosts where id=? LIMIT 1");
+	my $sth = $self->{dbh}->prepare("select host from hosts where id=? LIMIT 1;");
 	$sth->execute($id);
 	return $sth->fetchrow_array;
 }
@@ -61,7 +61,7 @@ sub get_host_from_id {
 sub set_host_status {
 	my ($self, $id, $status) = @_;
 	print "host: $id done: $status\n";
-	my $sth = $self->{dbh}->prepare("update hosts set status=? where id=?");
+	my $sth = $self->{dbh}->prepare("update hosts set status=? where id=?;");
 	$sth->execute($status, $id);
 }
 
@@ -72,7 +72,7 @@ sub get_unvisited_hostids {
 	foreach (@_) {
 		push @expressions, " and id <> ?";
 	}
-	my $sth = $self->{dbh}->prepare("select id from hosts where status=0" . join("", @expressions) . " LIMIT ?");
+	my $sth = $self->{dbh}->prepare("select id from hosts where status=0" . join("", @expressions) . " LIMIT ?;");
 	$sth->execute(@_, $max);
 	my @res;
 	while (my $id = $sth->fetchrow()) {
@@ -89,27 +89,31 @@ sub add_endpoint {
 
 sub set_endpoint_status {
 	my ($self, $id, $status) = @_;
-	my $sth = $self->{dbh}->prepare("update endpoints set status=? where id=?");
+	my $sth = $self->{dbh}->prepare("update endpoints set status=? where id=?;");
 	$sth->execute($status, $id);
 }
 
 sub get_endpoints_where_status {
 	my ($self, $hostid, $status) = @_;
-	my $sth = $self->{dbh}->prepare("select * from endpoints where hostid=? and status=?");
+	my $sth = $self->{dbh}->prepare("select * from endpoints where hostid=? and status=?;");
 	$sth->execute($hostid, $status);
 	return $sth->fetchall_arrayref();
 }
 
 sub get_endpoints_from_host {
 	my ($self, $hostid) = @_;
-	my $sth = $self->{dbh}->prepare("select * from endpoints where hostid=?");
+	my $sth = $self->{dbh}->prepare("select * from endpoints where hostid=?;");
 	$sth->execute($hostid);
 	return $sth->fetchall_arrayref();
 }
 
 sub increment_reference {
-	my ($self, $from_host, $from_port, $to_host, $to_port) = @_;
-	$self->{dbh}->do("UPDATE refs SET count = count + 1 WHERE pair=?; IF changes() = 0 THEN INSERT INTO refs (pair, count) VALUES (?, ?) END;", undef, "$from_host:$from_port->$to_host:$to_port", "$from_host:$from_port->$to_host:$to_port", 1);
+	my ($self, $hostid_from, $hostid_to) = @_;
+	my $sth = $self->{dbh}->prepare("UPDATE refs SET count = count + 1 WHERE hostid_from=? AND hostid_to=?;");
+	$sth->execute($hostid_from, $hostid_to);
+	unless ($sth->rows) {
+		$self->{dbh}->do("INSERT INTO refs (hostid_from, hostid_to, count) VALUES (?, ?, 1);", undef, $hostid_from, $hostid_to);
+	}
 }
 
 1;
