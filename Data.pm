@@ -71,6 +71,9 @@ sub set_host_status {
 sub get_unvisited_hostids {
 	my $self = shift;
 	my $max = shift;
+
+	return () unless $max;
+
 	my @expressions;
 	foreach (@_) {
 		push @expressions, " and id <> ?";

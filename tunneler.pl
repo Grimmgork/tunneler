@@ -11,7 +11,7 @@ use constant CONFIG => {
 	ping			=> "8.8.8.8",
 	file_db			=> "gopherspace.db",
 	file_stat		=> "status.txt",
-	max_depth		=> 10,
+	max_depth		=> 4,
 	no_workers		=> 3,
 	no_hosts		=> 3
 };
@@ -79,7 +79,11 @@ sub state_has_changed {
 	}
 
 	# try load unique unvisited hosts into empty slots (fifo)
-	my @ids = $DATA->get_unvisited_hostids(scalar(@hosts), map(sub { $_->id }, @hosts));
+	my @blacklist;
+	foreach (@hosts) {
+		push(@blacklist, $_->id) if $_;
+	}
+	my @ids = $DATA->get_unvisited_hostids(scalar(@hosts) - scalar(@blacklist), @blacklist);
 	foreach (0..$#hosts) {
 		unless ($hosts[$_]) {
 			my $id = shift @ids;
@@ -131,9 +135,7 @@ sub on_work_success {
 sub on_work_error {
 	my ($dispatcher, $context, $error) = @_;
 
-	my $nodeid = $context->id;
-	my $hostid = $context->host->id;
-	print "ERROR: $hostid $nodeid $error\n";
+	print "ERROR: host:", $context->host->name, " nodeid:", $context->id, " code:$error\n";
 
 	$DATA->set_endpoint_status($context->id, 2);
 	$context->host->busy(0);
@@ -225,7 +227,7 @@ sub digest_path {
 			push(@{$host->unvisited}, $_);
 		}
 		$_->id($DATA->add_endpoint($host->id, $gophertype, get_path_from_node($_), 0));
-		print "~ PATH: $gophertype @segments\n";
+		print "~ PATH: ", $host->id, " $gophertype @segments\n";
 	}
 }
 
