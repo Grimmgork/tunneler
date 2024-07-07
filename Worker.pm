@@ -26,7 +26,8 @@ sub new {
 		work   => shift,
 		child => $child,
 		parent => $parent,
-		pid => undef
+		pid => undef,
+		workid => undef
 	};
 
 	bless $self, $class;
@@ -45,8 +46,14 @@ sub read_response {
 	return read_array($self->{child});
 }
 
+sub get_work_id {
+	my $self = shift;
+	return $self->{workid};
+}
+
 sub start_work {
 	my $self = shift;
+	$self->{workid} = shift;
 	write_array($self->{child}, WORKER_CMD_START, @_);
 }
 

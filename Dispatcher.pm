@@ -51,6 +51,7 @@ sub loop {
 		foreach (@workers) {
 			next if not $_->has_response();
 
+			my $workid = $_->get_work_id();
 			my @res = $_->read_response();
 			my $type = shift(@res);
 
@@ -58,7 +59,7 @@ sub loop {
 			if ($type eq WORKER_EVENT_YIELD)
 			{
 				# handle yield
-				$exit = $self->{on_work_yield}->($self, @res);
+				$exit = $self->{on_work_yield}->($self, $workid, @res);
 				last if $exit;
 			}
 
@@ -71,19 +72,19 @@ sub loop {
 				if ($code)
 				{
 					# handle error
-					$exit = $self->{on_work_error}->($self, $code);
+					$exit = $self->{on_work_error}->($self, $workid, $code);
 					last if $exit;
 				}
 				else
 				{
 					# handle success
-					$exit = $self->{on_work_success}->($self);
+					$exit = $self->{on_work_success}->($self, $workid);
 					last if $exit;
 				}
 			}
 		}
 
-		sleep(1);
+		# sleep(1);
 	}
 	
 	foreach (@workers) {
@@ -93,15 +94,16 @@ sub loop {
 
 sub free_workers {
 	my $self = shift;
-	my $length = $self->{free_workers};
+	my $length = @{$self->{free_workers}};
 	return $length;
 }
 
 sub start_work {
 	my $self = shift;
+	my $workid = shift;
 	my $worker = shift(@{$self->{free_workers}});
 	die "all workers busy!" if not $worker;
-	$worker->start_work(@_);
+	$worker->start_work($workid, @_);
 }
 
 1;

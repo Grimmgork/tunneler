@@ -56,7 +56,7 @@ sub try_register_host {
 
 sub get_host_from_id {
 	my ($self, $id) = @_;
-	my $sth = $self->{dbh}->prepare("select host from hosts where id=? LIMIT 1;");
+	my $sth = $self->{dbh}->prepare("SELECT host, port FROM hosts WHERE id=? LIMIT 1;");
 	$sth->execute($id);
 	return $sth->fetchrow_array;
 }
@@ -75,7 +75,7 @@ sub get_unvisited_hostids {
 	foreach (@_) {
 		push @expressions, " and id <> ?";
 	}
-	my $sth = $self->{dbh}->prepare("select id from hosts where status=0" . join("", @expressions) . " LIMIT ?;");
+	my $sth = $self->{dbh}->prepare("SELECT id FROM hosts WHERE status=0" . join("", @expressions) . " ORDER BY id ASC LIMIT ?;");
 	$sth->execute(@_, $max);
 	my @res;
 	while (my $id = $sth->fetchrow()) {
