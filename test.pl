@@ -13,40 +13,45 @@ struct PathNode => {
 	host => '$'
 };
 
-sub methoda {
-	return [rand(10), rand(10), rand(10), rand(10) ,rand(10), rand(10), rand(10), rand(10), rand(10), rand(10)];
+struct Host => {
+	name => '$',
+	port => '$',
+	root => '$',
+	id => '$',
+	unvisited => '@',
+	busy => '$',
+	heat => '$'
+};
+
+my $pointer = 0;
+my @array;
+push @array, create_host();
+push @array, create_host();
+push @array, create_host();
+push @array, create_host();
+push @array, create_host();
+
+sub create_host {
+	my $host = Host->new();
+	$host->busy(1);
+	return $host;
 }
 
-sub methodb {
-	return (rand(10), rand(10), rand(10), rand(10) ,rand(10), rand(10), rand(10), rand(10), rand(10), rand(10));
-}
-
-
-print "start a ...\n";
-my $keka = 0;
-my $starta = time;
-foreach(1..10000000)
-{
-	my $result = methoda();
-	foreach(@$result) {
-		$keka += $_;
+sub find_next_work {
+	my $count = scalar(@array);
+	while ($count) {
+		$count--;
+		my $host = $array[0];
+		push @array, shift @array;
+		next unless $host;
+		next if $host->busy;
+		return pop @{$_->unvisited};
 	}
+	return undef;
 }
-print time - $starta, "\n";
 
-print "start b ...\n";
-my $kekb = 0;
-my $startb = time;
-foreach(1..10000000)
-{
-	my @result = methodb();
-	foreach(@result) {
-		$kekb += $_;
-	}
-}
-print time - $startb, "\n";
-print $keka, "\n";
-print $kekb, "\n";
+find_next_work();
+
 exit;
 
 sub work {

@@ -12,8 +12,8 @@ use constant CONFIG => {
 	file_db			=> "gopherspace.db",
 	file_stat		=> "status.txt",
 	max_depth		=> 4,
-	no_workers		=> 3,
-	no_hosts		=> 3
+	no_workers		=> 4,
+	no_hosts		=> 5
 };
 
 struct Host => {
@@ -57,11 +57,16 @@ sub on_init {
 }
 
 sub find_next_work {
-	foreach (@hosts) {
-		next unless $_;
-		next if $_->busy;
-		return pop @{$_->unvisited};
+	my $count = scalar(@hosts);
+	while ($count) {
+		$count--;
+		my $host = $hosts[0];
+		push @hosts, shift @hosts;
+		next unless $host;
+		next if $host->busy;
+		return pop @{$host->unvisited};
 	}
+	return undef;
 }
 
 sub state_has_changed {
